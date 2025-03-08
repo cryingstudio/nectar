@@ -66,15 +66,52 @@ async function fetchCoupons(domain: string): Promise<Coupon[]> {
       let verified = false;
 
       // Check for verified badge
-      const verifiedBadge = element.querySelector('img[alt="Verified Coupon"]');
-      if (verifiedBadge) {
+      if (element.getAttribute("data-is-verified") === "True") {
         verified = true;
+      } else {
+        verified = false;
       }
 
       // Check if it's a coupon with a code
-      const codeElement = element.querySelector(".code");
-      if (codeElement) {
-        code = codeElement.textContent.trim();
+      const showAsCoupon = element.getAttribute("data-type") === "coupon";
+      if (showAsCoupon) {
+        const modalUrl = element.getAttribute("data-modal");
+        if (modalUrl) {
+          try {
+            // Construct the full URL
+            const fullModalUrl = new URL(modalUrl, `https://couponfollow.com`);
+
+            console.log("Fetching modal from:", fullModalUrl.href);
+
+            const modalResponse = await fetch(fullModalUrl.href, {
+              redirect: "follow", // Allow redirects
+              headers: {
+                "User-Agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                Referer: couponFollowUrl,
+                Origin: "https://couponfollow.com",
+              },
+            });
+
+            if (modalResponse.ok) {
+              const modalHtml = await modalResponse.text();
+              const modalDoc = parse(modalHtml);
+              const modalCodeElement = modalDoc.querySelector("input.code");
+              if (modalCodeElement) {
+                code = (modalCodeElement as any)?.value?.trim() || code;
+                console.log("Code found in modal:", code);
+              } else {
+                console.warn("No input.code found in modal");
+              }
+            } else {
+              console.error("Error fetching modal:", modalResponse.status);
+            }
+          } catch (modalError) {
+            console.error("Error fetching modal:", modalError);
+          }
+        }
+      } else {
+        console.warn("No data-modal attribute found");
       }
 
       coupons.push({
