@@ -22,13 +22,8 @@ export default defineConfig({
           service_worker: "background.js",
           type: "module",
         },
-        content_scripts: [
-          {
-            matches: ["https://couponfollow.com/*"],
-            js: ["content.js"],
-            run_at: "document_end",
-          },
-        ],
+        // We don't need content scripts here anymore as we're doing all fetching
+        // from the background script
       }),
       browser: "chrome",
     }),
@@ -42,13 +37,15 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     rollupOptions: {
-      // Instead of specifying multiple inputs, let the plugin handle that
-      // and we'll build the other components separately
       output: {
         entryFileNames: "[name].js",
         chunkFileNames: "[name].js",
         assetFileNames: "[name].[ext]",
       },
     },
+  },
+  // Add this to prevent issues with Puppeteer
+  optimizeDeps: {
+    exclude: ["puppeteer"],
   },
 });

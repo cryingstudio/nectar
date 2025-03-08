@@ -17,16 +17,23 @@ interface Coupon {
 
 export default function NectarExtension() {
   const [currentSite, setCurrentSite] = useState("");
-  const [coupons, setCoupons] = useState<Coupon[]>([]); // Initialize as empty array
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
 
   useEffect(() => {
-    const getCurrentSite = async () => {
+    const getCurrentSiteAndCoupons = async () => {
       try {
+        setLoading(true);
+        setError(null);
+
+        // Get the current tab information
         const tabs = await chrome.tabs.query({
           active: true,
           currentWindow: true,
         });
+
         const currentTab = tabs[0];
         if (currentTab && currentTab.url) {
           const currentUrl = new URL(currentTab.url);
@@ -34,45 +41,41 @@ export default function NectarExtension() {
           domain = domain.replace(/^www\./, "");
           setCurrentSite(domain);
 
-          // Construct the CouponFollow search URL
-          const couponFollowUrl = `https://couponfollow.com/site/${domain}`;
-
-          // Inject the couponFollowUrl into the page
-          chrome.scripting.executeScript({
-            target: { tabId: currentTab.id || 0 },
-            func: (url) => {
-              (window as any).couponFollowUrl = url;
-            },
-            args: [couponFollowUrl],
-          });
-
-          // Execute the content script to get the coupons
-          chrome.scripting
-            .executeScript({
-              target: { tabId: currentTab.id || 0 }, // Ensure tabId is not undefined
-              files: ["content.js"], // Use files instead of func
-            })
-            .then((result) => {
-              console.log("Result from executeScript:", result);
-              // The result is an array of arrays.  We only care about the first result.
-              if (result && result.length > 0 && Array.isArray(result[0])) {
-                setCoupons(result[0] as Coupon[]);
-              } else {
-                console.warn("No coupons found or invalid result:", result);
-                setCoupons([]); // Ensure coupons is an empty array
+          // Message the background script to fetch the coupons
+          chrome.runtime.sendMessage(
+            { action: "scrapeCoupons", domain },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                console.error("Runtime error:", chrome.runtime.lastError);
+                setError(
+                  "Failed to communicate with the extension. Please try again."
+                );
+                setLoading(false);
+                return;
               }
-            })
-            .catch((error) => {
-              console.error("Error executing script:", error);
-              setCoupons([]); // Ensure coupons is an empty array
-            });
+
+              if (response && response.success) {
+                setCoupons(response.coupons);
+              } else {
+                setError(response?.error || "Failed to fetch coupons");
+                setCoupons([]);
+              }
+
+              setLoading(false);
+            }
+          );
+        } else {
+          setError("Could not determine the current website");
+          setLoading(false);
         }
-      } catch (error) {
-        console.error("Error getting current site:", error);
+      } catch (error: any) {
+        console.error("Error in getCurrentSiteAndCoupons:", error);
+        setError(error.message || "An unknown error occurred");
+        setLoading(false);
       }
     };
 
-    getCurrentSite();
+    getCurrentSiteAndCoupons();
   }, []);
 
   const handleCopy = (id: number, code: string) => {
@@ -92,7 +95,8 @@ export default function NectarExtension() {
             </Badge>
           </h1>
           <p className="text-sm text-neutral-400 pt-1">
-            Finding the best deals for {<b>{currentSite}</b>}
+            Finding the best deals for{" "}
+            {currentSite ? <b>{currentSite}</b> : "this site"}
           </p>
         </div>
       </div>
@@ -100,52 +104,71 @@ export default function NectarExtension() {
       <Separator className="bg-neutral-800" />
 
       <div className="pl-4 bg-neutral-900 text-neutral-400 text-sm">
-        {coupons.length} coupons found for this site
+        {loading
+          ? "Searching for coupons..."
+          : error
+          ? "Could not load coupons"
+          : `${coupons.length} coupons found for this site`}
       </div>
 
       <CardContent className="p-0">
         <div className="max-h-[350px] overflow-y-auto custom-scrollbar">
-          {coupons.map((coupon, index) => (
-            <div
-              key={coupon.id}
-              className={`p-4 border-b border-neutral-800 hover:bg-neutral-800/50 ${
-                index === 0 ? "border-t border-neutral-800" : ""
-              }`}
-            >
-              <div className="flex justify-between items-center mb-2">
-                <div className="flex items-center">
-                  <span className="text-sm font-mono font-bold text-white bg-neutral-800 px-3 py-2 rounded">
-                    {coupon.code}
-                  </span>
-                  {coupon.verified && (
-                    <Badge className="ml-2 bg-green-900 text-green-300 hover:bg-green-900">
-                      Verified
-                    </Badge>
-                  )}
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={`border-amber-600 bg-neutral-900 text-amber-400 hover:bg-amber-600/40 ${
-                    copiedId === coupon.id ? "bg-amber-600/30" : ""
-                  }`}
-                  onClick={() => handleCopy(coupon.id, coupon.code)}
-                >
-                  {copiedId === coupon.id ? (
-                    <>
-                      <Check className="h-4 w-4 mr-1" /> Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4 mr-1" /> Copy
-                    </>
-                  )}
-                </Button>
-              </div>
-              <p className="font-medium text-amber-400">{coupon.discount}</p>
-              <p className="text-sm text-neutral-400 mt-1">{coupon.terms}</p>
+          {loading ? (
+            <div className="p-4 text-center text-neutral-400">
+              <div className="animate-pulse">Loading coupons...</div>
             </div>
-          ))}
+          ) : error ? (
+            <div className="p-4 text-center text-red-400">
+              <p>{error}</p>
+              <p className="text-sm mt-2">Please try again later</p>
+            </div>
+          ) : coupons.length === 0 ? (
+            <div className="p-4 text-center text-neutral-400">
+              No coupons found for this site
+            </div>
+          ) : (
+            coupons.map((coupon, index) => (
+              <div
+                key={coupon.id}
+                className={`p-4 border-b border-neutral-800 hover:bg-neutral-800/50 ${
+                  index === 0 ? "border-t border-neutral-800" : ""
+                }`}
+              >
+                <div className="flex justify-between items-center mb-2">
+                  <div className="flex items-center">
+                    <span className="text-sm font-mono font-bold text-white bg-neutral-800 px-3 py-2 rounded">
+                      {coupon.code}
+                    </span>
+                    {coupon.verified && (
+                      <Badge className="ml-2 bg-green-900 text-green-300 hover:bg-green-900">
+                        Verified
+                      </Badge>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={`border-amber-600 bg-neutral-900 text-amber-400 hover:bg-amber-600/40 ${
+                      copiedId === coupon.id ? "bg-amber-600/30" : ""
+                    }`}
+                    onClick={() => handleCopy(coupon.id, coupon.code)}
+                  >
+                    {copiedId === coupon.id ? (
+                      <>
+                        <Check className="h-4 w-4 mr-1" /> Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-4 w-4 mr-1" /> Copy
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <p className="font-medium text-amber-400">{coupon.discount}</p>
+                <p className="text-sm text-neutral-400 mt-1">{coupon.terms}</p>
+              </div>
+            ))
+          )}
         </div>
       </CardContent>
 
