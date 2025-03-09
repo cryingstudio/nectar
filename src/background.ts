@@ -11,7 +11,7 @@ interface CachedCouponData {
   timestamp: number;
 }
 
-const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 1 days in milliseconds
+const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 1 day in milliseconds
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Nectar extension installed!");
@@ -21,19 +21,16 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.action === "scrapeCoupons") {
     const domain = message.domain;
-    console.log("Background script scraping coupons for:", domain);
 
     // Check local storage for cached data
     getCachedCoupons(domain)
       .then((cachedData) => {
         if (cachedData) {
-          console.log("Using cached coupon data for:", domain);
           sendResponse({ success: true, coupons: cachedData.coupons });
         } else {
           // Fetch coupon data using a headless Chrome tab
           fetchCouponsWithChromeAPI(domain)
             .then((coupons) => {
-              console.log("Coupons found:", coupons);
               // Cache the results
               cacheCoupons(domain, coupons);
               sendResponse({ success: true, coupons });
@@ -49,7 +46,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         // On cache error, just try to fetch new data
         fetchCouponsWithChromeAPI(domain)
           .then((coupons) => {
-            console.log("Coupons found after cache error:", coupons);
             // Try to cache again
             cacheCoupons(domain, coupons);
             sendResponse({ success: true, coupons });
@@ -60,8 +56,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           });
       });
 
-    debugStorage();
-
     // Return true to indicate we'll send an async response
     return true;
   }
@@ -71,50 +65,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function getCachedCoupons(
   domain: string
 ): Promise<CachedCouponData | null> {
-  console.log(`Checking cache for domain: ${domain}`);
   return new Promise((resolve) => {
     const cacheKey = `nectar_coupons_${domain}`;
-    console.log(`Using cache key: ${cacheKey}`);
-
     chrome.storage.local.get([cacheKey], (result) => {
-      console.log(`Cache result:`, result);
       const cachedData = result[cacheKey] as CachedCouponData;
 
       if (!cachedData) {
-        console.log("No cached data found for domain:", domain);
         resolve(null);
         return;
       }
 
       const now = Date.now();
       const cacheAge = now - cachedData.timestamp;
-      console.log(`Cache age: ${cacheAge}ms, limit: ${CACHE_DURATION_MS}ms`);
 
-      // Check if cache is expired (older than CACHE_DURATION_MS)
+      // Check if cache is expired
       if (cacheAge > CACHE_DURATION_MS) {
-        console.log("Cached data is expired for domain:", domain);
         // Remove expired cache
-        chrome.storage.local.remove(cacheKey, () => {
-          console.log("Removed expired cache for domain:", domain);
-        });
+        chrome.storage.local.remove(cacheKey);
         resolve(null);
       } else {
-        console.log(
-          "Using cached data from",
-          new Date(cachedData.timestamp).toLocaleString(),
-          "with",
-          cachedData.coupons.length,
-          "coupons"
-        );
         resolve(cachedData);
       }
     });
-  });
-}
-
-function debugStorage() {
-  chrome.storage.local.get(null, (items) => {
-    console.log("Current storage items:", items);
   });
 }
 
@@ -126,9 +98,7 @@ function cacheCoupons(domain: string, coupons: Coupon[]): void {
     timestamp: Date.now(),
   };
 
-  chrome.storage.local.set({ [cacheKey]: cachedData }, () => {
-    console.log("Cached coupon data for domain:", domain);
-  });
+  chrome.storage.local.set({ [cacheKey]: cachedData });
 }
 
 // Setup a periodic cleanup of expired caches
@@ -151,14 +121,12 @@ function cleanupExpiredCaches(): void {
 
     // Remove expired keys
     if (keysToRemove.length > 0) {
-      chrome.storage.local.remove(keysToRemove, () => {
-        console.log("Cleaned up", keysToRemove.length, "expired caches");
-      });
+      chrome.storage.local.remove(keysToRemove);
     }
   });
 }
 
-// Run cleanup on startup and periodically (daily)
+// Run cleanup on startup and periodically
 chrome.runtime.onStartup.addListener(() => {
   cleanupExpiredCaches();
 });
@@ -174,7 +142,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 async function fetchCouponsWithChromeAPI(domain: string): Promise<Coupon[]> {
   try {
     const couponFollowUrl = `https://couponfollow.com/site/${domain}`;
-    console.log("Fetching from:", couponFollowUrl);
 
     // Create a new tab to load the page
     const tab = await createTabAsync(couponFollowUrl);
@@ -193,24 +160,13 @@ async function fetchCouponsWithChromeAPI(domain: string): Promise<Coupon[]> {
       // Check if this coupon has a modal URL to fetch the code
       if (modalUrls[i]) {
         try {
-          // Get the full modal URL
-          const modalUrl = modalUrls[i];
-          if (modalUrl) {
-            const fullModalUrl = new URL(modalUrl, "https://couponfollow.com")
-              .href;
-            console.log(
-              `Fetching code for coupon ${coupon.id} from modal: ${fullModalUrl}`
-            );
-          }
-
           // Navigate to the modal and get the code
           const code = await getCouponCodeFromModal(
             tab.id as number,
-            modalUrl as string
+            modalUrls[i] as string
           );
 
           coupon.code = code;
-          console.log(coupon.code);
         } catch (modalError) {
           console.error(
             `Error fetching code for coupon ${coupon.id}:`,
@@ -345,34 +301,24 @@ async function getCouponCodeFromModal(
   tabId: number,
   modalUrl: string
 ): Promise<string> {
-  console.log(`Getting coupon code from modal: ${modalUrl}`);
-
   // Extract the coupon ID from the URL
   const couponId = modalUrl.split("#")[1];
-  console.log(`Extracted coupon ID: ${couponId}`);
 
   if (!couponId) {
-    console.error("No coupon ID found in modal URL");
     return "AUTOMATIC";
   }
 
-  // Try a direct modal URL approach instead
-  // Many sites use a direct URL for modals, let's try various formats
+  // Try a direct modal URL approach
   const possibleDirectUrls = [modalUrl];
 
   // Try each URL until we find one that works
   for (const url of possibleDirectUrls) {
-    console.log(`Trying direct URL: ${url}`);
-
     // Navigate to the URL
     await navigateTabAsync(tabId, url);
-
     await refreshTabAsync(tabId);
 
     // Check if we can find a code on this page
     const extractCodeScript = () => {
-      console.log("Looking for coupon code on page");
-
       // Based on your screenshot, try very specific selectors first
       const specificSelectors = [
         "input#code.input.code",
@@ -388,18 +334,15 @@ async function getCouponCodeFromModal(
         const element = document.querySelector(selector);
         if (element) {
           const value = (element as HTMLInputElement).value.trim();
-          console.log(`Found code with selector ${selector}: ${value}`);
           return value;
         }
       }
 
-      // If that doesn't work, let's analyze the whole page for any inputs
+      // If that doesn't work, analyze the whole page for any inputs
       const allInputs = document.querySelectorAll("input");
-      console.log(`Found ${allInputs.length} input elements on page`);
 
       for (const input of allInputs) {
         if (input.value) {
-          console.log(`Input with value: ${input.value}`);
           // If it looks like a coupon code (uppercase letters/numbers)
           if (/^[A-Z0-9]+$/.test(input.value.trim())) {
             return input.value.trim();
@@ -407,25 +350,18 @@ async function getCouponCodeFromModal(
         }
       }
 
-      // As a last resort, dump the entire page content to debug
-      console.log("Page HTML:", document.documentElement.outerHTML);
-
       return null;
     };
 
     // Execute the extraction script
     const code = await executeScriptInTab(tabId, extractCodeScript);
-    console.log(`Extracted code from ${url}: ${code}`);
 
     if (code) {
       return code;
     }
   }
 
-  // If we still can't find the code, let's try one more approach:
-  // Load the coupon page and look for API calls or data attributes
-  console.log("Trying to find code in page data or API calls");
-
+  // If we still can't find the code, try one more approach:
   await navigateTabAsync(tabId, `https://couponfollow.com/site/amazon.co.uk`);
 
   const extractDataScript = () => {
@@ -440,7 +376,6 @@ async function getCouponCodeFromModal(
       for (const attr of possibleCodeAttrs) {
         const code = element.getAttribute(attr);
         if (code) {
-          console.log(`Found code in attribute ${attr}: ${code}`);
           return code;
         }
       }
@@ -450,7 +385,6 @@ async function getCouponCodeFromModal(
       if (codeElement) {
         const code = codeElement.textContent?.trim();
         if (code) {
-          console.log(`Found code in element: ${code}`);
           return code;
         }
       }
@@ -469,21 +403,15 @@ async function getCouponCodeFromModal(
 }
 
 function refreshTabAsync(tabId: number): Promise<void> {
-  console.log(`Refreshing tab ${tabId}`);
-
   return new Promise((resolve, reject) => {
     chrome.tabs.reload(tabId, {}, () => {
       if (chrome.runtime.lastError) {
-        console.error("Refresh error:", chrome.runtime.lastError);
         reject(new Error(chrome.runtime.lastError.message));
         return;
       }
 
-      console.log("Tab refresh initiated, waiting for complete load");
-
       // Set a timeout in case the onUpdated event never fires with "complete"
       const timeout = setTimeout(() => {
-        console.log("Refresh timeout reached, proceeding anyway");
         resolve();
       }, 1000);
 
@@ -492,15 +420,10 @@ function refreshTabAsync(tabId: number): Promise<void> {
         updatedTabId,
         changeInfo
       ) {
-        if (updatedTabId === tabId) {
-          console.log(`Tab refresh status: ${changeInfo.status}`);
-
-          if (changeInfo.status === "complete") {
-            console.log("Tab refresh complete");
-            chrome.tabs.onUpdated.removeListener(listener);
-            clearTimeout(timeout);
-            resolve();
-          }
+        if (updatedTabId === tabId && changeInfo.status === "complete") {
+          chrome.tabs.onUpdated.removeListener(listener);
+          clearTimeout(timeout);
+          resolve();
         }
       });
     });
@@ -517,10 +440,8 @@ async function executeScriptInTab<T>(tabId: number, func: () => T): Promise<T> {
       },
       (results) => {
         if (chrome.runtime.lastError) {
-          console.error("Script execution error:", chrome.runtime.lastError);
           reject(new Error(chrome.runtime.lastError.message));
         } else if (!results || results.length === 0) {
-          console.log("No results from execute script");
           resolve(null as unknown as T);
         } else {
           resolve(results[0].result as T);
@@ -532,21 +453,15 @@ async function executeScriptInTab<T>(tabId: number, func: () => T): Promise<T> {
 
 // Enhanced navigation function
 function navigateTabAsync(tabId: number, url: string): Promise<void> {
-  console.log(`Navigating tab ${tabId} to ${url}`);
-
   return new Promise((resolve, reject) => {
     chrome.tabs.update(tabId, { url }, (_tab) => {
       if (chrome.runtime.lastError) {
-        console.error("Navigation error:", chrome.runtime.lastError);
         reject(new Error(chrome.runtime.lastError.message));
         return;
       }
 
-      console.log("Tab update initiated, waiting for complete load");
-
       // Set a timeout in case the onUpdated event never fires with "complete"
       const timeout = setTimeout(() => {
-        console.log("Navigation timeout reached, proceeding anyway");
         resolve();
       }, 500);
 
@@ -555,15 +470,10 @@ function navigateTabAsync(tabId: number, url: string): Promise<void> {
         updatedTabId,
         changeInfo
       ) {
-        if (updatedTabId === tabId) {
-          console.log(`Tab update status: ${changeInfo.status}`);
-
-          if (changeInfo.status === "complete") {
-            console.log("Tab loading complete");
-            chrome.tabs.onUpdated.removeListener(listener);
-            clearTimeout(timeout);
-            resolve();
-          }
+        if (updatedTabId === tabId && changeInfo.status === "complete") {
+          chrome.tabs.onUpdated.removeListener(listener);
+          clearTimeout(timeout);
+          resolve();
         }
       });
     });

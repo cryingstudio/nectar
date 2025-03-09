@@ -136,7 +136,7 @@ export default function NectarExtension() {
               >
                 <div className="flex justify-between items-center mb-2">
                   <div className="flex items-center">
-                    <span className="text-sm font-mono font-bold text-white bg-neutral-800 px-3 py-2 rounded">
+                    <span className="text-sm font-bold text-white bg-neutral-800 px-3 py-2 rounded">
                       {coupon.code}
                     </span>
                     {coupon.verified && (
