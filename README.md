@@ -1,10 +1,8 @@
 # Nectar - Automatic Coupon Finder
 
----
-
 ## 🍯 What is Nectar?
 
-Nectar is a powerful browser extension that automatically finds and tests coupon codes while you shop online. Stop wasting time searching for promo codes that don't work - Nectar verifies coupons in real-time and lets you apply them with a single click.
+Nectar is a powerful browser extension that automatically finds and tests coupon codes while you shop online. Stop wasting time searching for coupon codes - Nectar lets you apply them with a single click.
 
 ## ✨ Features
 
