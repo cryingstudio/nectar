@@ -15,7 +15,7 @@ export default defineConfig({
         version: "1.0.0",
         manifest_version: 3,
         description: "Save Money with ONE click!",
-        permissions: ["activeTab", "scripting", "storage"],
+        permissions: ["activeTab", "scripting", "storage", "tabs"],
         host_permissions: ["*://*/*"],
         action: { default_popup: "index.html" },
         background: {
