@@ -1,0 +1,32 @@
+{"name": "Nectar",
+"version": "1.0.0",
+"manifest_version": 3,
+"description": "Save Money with ONE click!",
+"permissions": [
+  "activeTab",
+  "scripting",
+  "storage",
+  "tabs",
+  "alarms",
+  "notifications"
+],
+"host_permissions": ["*://*/*"],
+"action": { "default_popup": "index.html" },
+"background": {
+  "service_worker": "background.js",
+  "type": "module"
+},
+"content_scripts": [
+  {
+    "matches": ["<all_urls>"],
+    "js": ["content-script.js"],
+    "run_at": "document_end"
+  }
+],
+"icons": {
+    "16": "Nectar-16.png",
+    "32": "Nectar-32.png",
+    "48": "Nectar-48.png",
+    "128": "Nectar-128.png"
+    }
+}

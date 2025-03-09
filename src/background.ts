@@ -11,14 +11,32 @@ interface CachedCouponData {
   timestamp: number;
 }
 
+interface ApplyResult {
+  code: string;
+  success: boolean;
+  savings: number | null;
+  error?: string;
+}
+
 const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 1 day in milliseconds
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Nectar extension installed!");
+  // Register content script to detect coupon inputs
+  chrome.scripting
+    .registerContentScripts([
+      {
+        id: "coupon-detector",
+        matches: ["<all_urls>"],
+        js: ["content-script.js"],
+        runAt: "document_end",
+      },
+    ])
+    .catch((err) => console.error("Error registering content script:", err));
 });
 
-// Listen for messages from the popup
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+// Listen for messages from the popup and content script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "scrapeCoupons") {
     const domain = message.domain;
 
@@ -57,6 +75,99 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
 
     // Return true to indicate we'll send an async response
+    return true;
+  }
+
+  // New message handler for coupon input detection
+  if (message.action === "couponInputDetected") {
+    const domain = new URL(sender.tab?.url || "").hostname;
+
+    // Get coupons for this domain
+    getCachedCoupons(domain)
+      .then(async (cachedData) => {
+        let coupons: Coupon[] = [];
+
+        if (cachedData) {
+          coupons = cachedData.coupons;
+        } else {
+          try {
+            coupons = await fetchCouponsWithChromeAPI(domain);
+            cacheCoupons(domain, coupons);
+          } catch (error) {
+            console.error("Error fetching coupons:", error);
+            sendResponse({ success: false, error: (error as Error).message });
+            return;
+          }
+        }
+
+        if (coupons.length === 0) {
+          sendResponse({
+            success: false,
+            message: "No coupons found for this site",
+          });
+          return;
+        }
+
+        // Start the auto-apply process in the content script
+        chrome.tabs.sendMessage(sender.tab?.id as number, {
+          action: "startCouponTesting",
+          coupons: coupons,
+        });
+
+        sendResponse({ success: true, message: "Starting coupon testing" });
+      })
+      .catch((error) => {
+        console.error("Error processing coupon auto-apply:", error);
+        sendResponse({ success: false, error: error.message });
+      });
+
+    return true;
+  }
+
+  // Handle test results from content script
+  if (message.action === "couponTestingComplete") {
+    const results = message.results as ApplyResult[];
+    const bestResult = results.reduce(
+      (best, current) => {
+        // If current has a higher savings, it's better
+        if (current.success && current.savings !== null) {
+          if (
+            !best.success ||
+            best.savings === null ||
+            current.savings > best.savings
+          ) {
+            return current;
+          }
+        }
+        return best;
+      },
+      { success: false, savings: null, code: "" } as ApplyResult
+    );
+
+    if (bestResult.success) {
+      // Send message to content script to apply the best coupon
+      chrome.tabs.sendMessage(sender.tab?.id as number, {
+        action: "applyBestCoupon",
+        code: bestResult.code,
+      });
+
+      // Show a notification to the user
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon128.png",
+        title: "Nectar Coupon Finder",
+        message: `Applied the best coupon: ${bestResult.code} (saved ${bestResult.savings})`,
+      });
+    } else {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icon128.png",
+        title: "Nectar Coupon Finder",
+        message: "No working coupons found for this site.",
+      });
+    }
+
+    sendResponse({ success: true });
     return true;
   }
 });
