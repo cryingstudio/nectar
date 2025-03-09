@@ -6,6 +6,13 @@ interface Coupon {
   verified: boolean;
 }
 
+interface CachedCouponData {
+  coupons: Coupon[];
+  timestamp: number;
+}
+
+const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 1 days in milliseconds
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Nectar extension installed!");
 });
@@ -16,19 +23,151 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const domain = message.domain;
     console.log("Background script scraping coupons for:", domain);
 
-    // Fetch coupon data using a headless Chrome tab
-    fetchCouponsWithChromeAPI(domain)
-      .then((coupons) => {
-        console.log("Coupons found:", coupons);
-        sendResponse({ success: true, coupons });
+    // Check local storage for cached data
+    getCachedCoupons(domain)
+      .then((cachedData) => {
+        if (cachedData) {
+          console.log("Using cached coupon data for:", domain);
+          sendResponse({ success: true, coupons: cachedData.coupons });
+        } else {
+          // Fetch coupon data using a headless Chrome tab
+          fetchCouponsWithChromeAPI(domain)
+            .then((coupons) => {
+              console.log("Coupons found:", coupons);
+              // Cache the results
+              cacheCoupons(domain, coupons);
+              sendResponse({ success: true, coupons });
+            })
+            .catch((error) => {
+              console.error("Error fetching coupons:", error);
+              sendResponse({ success: false, error: error.message });
+            });
+        }
       })
       .catch((error) => {
-        console.error("Error fetching coupons:", error);
-        sendResponse({ success: false, error: error.message });
+        console.error("Error checking cache:", error);
+        // On cache error, just try to fetch new data
+        fetchCouponsWithChromeAPI(domain)
+          .then((coupons) => {
+            console.log("Coupons found after cache error:", coupons);
+            // Try to cache again
+            cacheCoupons(domain, coupons);
+            sendResponse({ success: true, coupons });
+          })
+          .catch((error) => {
+            console.error("Error fetching coupons:", error);
+            sendResponse({ success: false, error: error.message });
+          });
       });
+
+    debugStorage();
 
     // Return true to indicate we'll send an async response
     return true;
+  }
+});
+
+// Function to get cached coupons if they exist and are not expired
+async function getCachedCoupons(
+  domain: string
+): Promise<CachedCouponData | null> {
+  console.log(`Checking cache for domain: ${domain}`);
+  return new Promise((resolve) => {
+    const cacheKey = `nectar_coupons_${domain}`;
+    console.log(`Using cache key: ${cacheKey}`);
+
+    chrome.storage.local.get([cacheKey], (result) => {
+      console.log(`Cache result:`, result);
+      const cachedData = result[cacheKey] as CachedCouponData;
+
+      if (!cachedData) {
+        console.log("No cached data found for domain:", domain);
+        resolve(null);
+        return;
+      }
+
+      const now = Date.now();
+      const cacheAge = now - cachedData.timestamp;
+      console.log(`Cache age: ${cacheAge}ms, limit: ${CACHE_DURATION_MS}ms`);
+
+      // Check if cache is expired (older than CACHE_DURATION_MS)
+      if (cacheAge > CACHE_DURATION_MS) {
+        console.log("Cached data is expired for domain:", domain);
+        // Remove expired cache
+        chrome.storage.local.remove(cacheKey, () => {
+          console.log("Removed expired cache for domain:", domain);
+        });
+        resolve(null);
+      } else {
+        console.log(
+          "Using cached data from",
+          new Date(cachedData.timestamp).toLocaleString(),
+          "with",
+          cachedData.coupons.length,
+          "coupons"
+        );
+        resolve(cachedData);
+      }
+    });
+  });
+}
+
+function debugStorage() {
+  chrome.storage.local.get(null, (items) => {
+    console.log("Current storage items:", items);
+  });
+}
+
+// Function to cache coupon data
+function cacheCoupons(domain: string, coupons: Coupon[]): void {
+  const cacheKey = `nectar_coupons_${domain}`;
+  const cachedData: CachedCouponData = {
+    coupons,
+    timestamp: Date.now(),
+  };
+
+  chrome.storage.local.set({ [cacheKey]: cachedData }, () => {
+    console.log("Cached coupon data for domain:", domain);
+  });
+}
+
+// Setup a periodic cleanup of expired caches
+function cleanupExpiredCaches(): void {
+  chrome.storage.local.get(null, (items) => {
+    const now = Date.now();
+    const keysToRemove: string[] = [];
+
+    // Check all keys that start with our prefix
+    for (const key in items) {
+      if (key.startsWith("nectar_coupons_")) {
+        const cachedData = items[key] as CachedCouponData;
+        const cacheAge = now - cachedData.timestamp;
+
+        if (cacheAge > CACHE_DURATION_MS) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+
+    // Remove expired keys
+    if (keysToRemove.length > 0) {
+      chrome.storage.local.remove(keysToRemove, () => {
+        console.log("Cleaned up", keysToRemove.length, "expired caches");
+      });
+    }
+  });
+}
+
+// Run cleanup on startup and periodically (daily)
+chrome.runtime.onStartup.addListener(() => {
+  cleanupExpiredCaches();
+});
+
+// Also set up a periodic cleanup using alarms
+chrome.alarms.create("cleanupCache", { periodInMinutes: 24 * 60 }); // Once per day
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "cleanupCache") {
+    cleanupExpiredCaches();
   }
 });
 
@@ -39,9 +178,6 @@ async function fetchCouponsWithChromeAPI(domain: string): Promise<Coupon[]> {
 
     // Create a new tab to load the page
     const tab = await createTabAsync(couponFollowUrl);
-
-    // Wait for the page to fully load
-    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // Execute script in the tab to extract basic coupon data and modal URLs
     const { basicCoupons, modalUrls } = await extractBasicCouponDataFromTab(
@@ -137,22 +273,22 @@ async function extractBasicCouponDataFromTab(tabId: number): Promise<{
     );
 
     couponElements.forEach((element: Element) => {
-      const discountEl = element.querySelector(".offer-title");
-      const termsEl = element.querySelector(".offer-description");
-
-      const discount = discountEl?.textContent?.trim() || "Discount";
-      const terms = termsEl?.textContent?.trim() || "Terms apply";
-      const verified = element.getAttribute("data-is-verified") === "True";
-
-      // Default code
-      let code = "AUTOMATIC";
-      let modalUrl = null;
-
       // Check if it's a coupon with a code
       const dataType = element.getAttribute("data-type");
-      const showAsCoupon = dataType === "coupon";
 
-      if (showAsCoupon) {
+      // Only process elements with data-type === "coupon"
+      if (dataType === "coupon") {
+        const discountEl = element.querySelector(".offer-title");
+        const termsEl = element.querySelector(".offer-description");
+
+        const discount = discountEl?.textContent?.trim() || "Discount";
+        const terms = termsEl?.textContent?.trim() || "Terms apply";
+        const verified = element.getAttribute("data-is-verified") === "True";
+
+        // Default code
+        let code = "AUTOMATIC";
+        let modalUrl = null;
+
         // Look for a code element directly in the DOM
         const codeEl = element.querySelector(".coupon-code");
         if (codeEl) {
@@ -161,17 +297,17 @@ async function extractBasicCouponDataFromTab(tabId: number): Promise<{
           // Get the modal URL for later processing
           modalUrl = element.getAttribute("data-modal");
         }
+
+        basicCoupons.push({
+          id: idCounter++,
+          code,
+          discount,
+          terms,
+          verified,
+        });
+
+        modalUrls.push(modalUrl);
       }
-
-      basicCoupons.push({
-        id: idCounter++,
-        code,
-        discount,
-        terms,
-        verified,
-      });
-
-      modalUrls.push(modalUrl);
     });
 
     return { basicCoupons, modalUrls };
@@ -233,9 +369,6 @@ async function getCouponCodeFromModal(
 
     await refreshTabAsync(tabId);
 
-    // Wait for the page to load
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
     // Check if we can find a code on this page
     const extractCodeScript = () => {
       console.log("Looking for coupon code on page");
@@ -294,7 +427,6 @@ async function getCouponCodeFromModal(
   console.log("Trying to find code in page data or API calls");
 
   await navigateTabAsync(tabId, `https://couponfollow.com/site/amazon.co.uk`);
-  await new Promise((resolve) => setTimeout(resolve, 3000));
 
   const extractDataScript = () => {
     // Look for any data attributes that might contain our coupon ID
@@ -353,7 +485,7 @@ function refreshTabAsync(tabId: number): Promise<void> {
       const timeout = setTimeout(() => {
         console.log("Refresh timeout reached, proceeding anyway");
         resolve();
-      }, 10000);
+      }, 1000);
 
       // Listen for the tab to complete loading
       chrome.tabs.onUpdated.addListener(function listener(
@@ -367,12 +499,7 @@ function refreshTabAsync(tabId: number): Promise<void> {
             console.log("Tab refresh complete");
             chrome.tabs.onUpdated.removeListener(listener);
             clearTimeout(timeout);
-
-            // Add a small delay after "complete" to ensure JS has run
-            setTimeout(() => {
-              console.log("Extra delay after refresh complete finished");
-              resolve();
-            }, 1000);
+            resolve();
           }
         }
       });
@@ -421,7 +548,7 @@ function navigateTabAsync(tabId: number, url: string): Promise<void> {
       const timeout = setTimeout(() => {
         console.log("Navigation timeout reached, proceeding anyway");
         resolve();
-      }, 10000);
+      }, 500);
 
       // Listen for the tab to complete loading
       chrome.tabs.onUpdated.addListener(function listener(
@@ -435,12 +562,7 @@ function navigateTabAsync(tabId: number, url: string): Promise<void> {
             console.log("Tab loading complete");
             chrome.tabs.onUpdated.removeListener(listener);
             clearTimeout(timeout);
-
-            // Add a small delay after "complete" to ensure JS has run
-            setTimeout(() => {
-              console.log("Extra delay after complete finished");
-              resolve();
-            }, 1000);
+            resolve();
           }
         }
       });
