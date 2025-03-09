@@ -10,7 +10,8 @@ export default defineConfig({
     react(),
     tailwindcss(),
     webExtension({
-      browser: "chrome",
+      browser: process.env.TARGET || "chrome",
+      manifest: "manifest-chrome.json",
     }),
   ],
   resolve: {
