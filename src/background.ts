@@ -299,7 +299,7 @@ async function fetchCouponsWithBrowserAPI(domain: string): Promise<Coupon[]> {
     const tab = await createTabAsync(couponUrl);
 
     // Wait for page load
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Extract coupon data
     const { basicCoupons, modalUrls } = await extractBasicCouponDataFromTab(
@@ -606,7 +606,7 @@ async function refreshTabAsync(tabId: number): Promise<void> {
     setTimeout(() => {
       browser.tabs.onUpdated.removeListener(onUpdated);
       resolve();
-    }, 1000);
+    }, 500);
   });
 }
 
