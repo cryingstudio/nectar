@@ -348,32 +348,19 @@ async function processCoupons(
   basicCoupons: Coupon[],
   modalUrls: (string | null)[]
 ): Promise<Coupon[]> {
-  const completeCoupons: Coupon[] = [];
-
-  for (let i = 0; i < basicCoupons.length; i++) {
-    const coupon = basicCoupons[i];
-
-    // Check if this coupon has a modal URL to fetch the code
+  const couponPromises = basicCoupons.map(async (coupon, i) => {
     if (modalUrls[i]) {
       try {
-        // Get the code from the modal
-        const code = await getCouponCodeFromModal(
-          tabId,
-          modalUrls[i] as string
-        );
-        coupon.code = code;
-      } catch (modalError) {
-        console.error(
-          `Error fetching code for coupon ${coupon.id}:`,
-          modalError
-        );
+        const code = await getCouponCodeFromModal(tabId, modalUrls[i]);
+        return { ...coupon, code };
+      } catch (error) {
+        console.error(`Error fetching code for coupon ${coupon.id}:`, error);
       }
     }
+    return coupon;
+  });
 
-    completeCoupons.push(coupon);
-  }
-
-  return completeCoupons;
+  return Promise.all(couponPromises);
 }
 
 /**
