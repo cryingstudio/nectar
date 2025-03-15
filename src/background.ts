@@ -8,11 +8,6 @@ interface Coupon {
   verified: boolean;
 }
 
-interface CachedCouponData {
-  coupons: Coupon[];
-  timestamp: number;
-}
-
 interface ApplyResult {
   code: string;
   success: boolean;
@@ -20,17 +15,12 @@ interface ApplyResult {
   error?: string;
 }
 
-// Constants
-const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 1 day in milliseconds
 const COUPON_SOURCE_URL = "https://couponfollow.com/site/";
+const API_BASE_URL = "https://nectar-db.vercel.app/api"; // Replace with your Vercel URL
 
-/**
- * Extension initialization
- */
+// Extension initialization and content script registration remains the same
 browser.runtime.onInstalled.addListener(() => {
   console.log("Nectar extension installed!");
-
-  // Register content script to detect coupon inputs
   browser.scripting
     .registerContentScripts([
       {
@@ -40,46 +30,45 @@ browser.runtime.onInstalled.addListener(() => {
         runAt: "document_end",
       },
     ])
-    .catch((err: any) =>
-      console.error("Error registering content script:", err)
-    );
+    .catch((err) => console.error("Error registering content script:", err));
 });
 
-/**
- * Message handler for all extension communication
- */
+// Message handler
 browser.runtime.onMessage.addListener((message: any, sender: any) => {
   switch (message.action) {
     case "scrapeCoupons":
       return handleScrapeCoupons(message.domain);
-
     case "couponInputDetected":
       return handleCouponInputDetected(sender);
-
     case "couponTestingComplete":
       return handleCouponTestingComplete(message, sender);
-
     default:
       return undefined;
   }
 });
 
-/**
- * Handle scraping coupons for a domain
- */
+// Modified to use Supabase via Vercel API
 async function handleScrapeCoupons(domain: string) {
   try {
-    // Check local storage for cached data
-    const cachedData = await getCachedCoupons(domain);
+    // Fetch coupons from API
+    const response = await fetch(
+      `${API_BASE_URL}/coupons?domain=${encodeURIComponent(domain)}`
+    );
+    if (!response.ok) throw new Error("Failed to fetch coupons");
+    const { coupons } = await response.json();
 
-    if (cachedData) {
-      return { success: true, coupons: cachedData.coupons };
-    } else {
-      // Fetch coupon data
-      const coupons = await fetchCouponsWithBrowserAPI(domain);
-      // Cache the results
-      await cacheCoupons(domain, coupons);
+    if (coupons.length > 0) {
       return { success: true, coupons };
+    } else {
+      // Scrape and store
+      const newCoupons = await fetchCouponsWithBrowserAPI(domain);
+      const storeResponse = await fetch(`${API_BASE_URL}/coupons`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain, coupons: newCoupons }),
+      });
+      if (!storeResponse.ok) throw new Error("Failed to store coupons");
+      return { success: true, coupons: newCoupons };
     }
   } catch (error) {
     console.error("Error handling scrape coupons:", error);
@@ -87,48 +76,35 @@ async function handleScrapeCoupons(domain: string) {
   }
 }
 
-/**
- * Handle coupon input detection from content script
- */
+// Modified to use API
 async function handleCouponInputDetected(sender: any) {
   try {
-    if (!sender.tab?.url) {
-      throw new Error("No URL provided");
-    }
+    if (!sender.tab?.url) throw new Error("No URL provided");
+    const domain = new URL(sender.tab.url).hostname;
 
-    const url = new URL(sender.tab.url);
-    const domain = url.hostname;
-
-    // Get coupons for this domain
-    let coupons: Coupon[] = [];
-    const cachedData = await getCachedCoupons(domain);
-
-    if (cachedData) {
-      coupons = cachedData.coupons;
-    } else {
-      coupons = await fetchCouponsWithBrowserAPI(domain);
-      await cacheCoupons(domain, coupons);
-    }
+    // Fetch coupons from API
+    const response = await fetch(
+      `${API_BASE_URL}/coupons?domain=${encodeURIComponent(domain)}`
+    );
+    if (!response.ok) throw new Error("Failed to fetch coupons");
+    const { coupons } = await response.json();
 
     if (coupons.length === 0) {
       return { success: false, message: "No coupons found for this site" };
     }
 
-    // Start the auto-apply process in the content script
     if (sender.tab?.id !== undefined) {
       await browser.tabs.sendMessage(sender.tab.id, {
         action: "startCouponTesting",
-        coupons: coupons,
+        coupons,
       });
     }
-
     return { success: true, message: "Starting coupon testing" };
   } catch (error) {
-    console.error("Error processing coupon auto-apply:", error);
+    console.error("Error processing auto-apply:", error);
     return { success: false, error: (error as Error).message };
   }
 }
-
 /**
  * Handle coupon testing results from content script
  */
@@ -146,13 +122,13 @@ async function handleCouponTestingComplete(message: any, sender: any) {
 
       // Show success notification
       await showNotification({
-        title: "Nectar Coupon Finder",
+        title: "Nectar",
         message: `Applied the best coupon: ${bestResult.code} (saved ${bestResult.savings})`,
       });
     } else {
       // Show failure notification
       await showNotification({
-        title: "Nectar Coupon Finder",
+        title: "Nectar",
         message: "No working coupons found for this site.",
       });
     }
@@ -202,85 +178,6 @@ async function showNotification({
     message,
   });
 }
-
-/**
- * Get cached coupons if they exist and are not expired
- */
-async function getCachedCoupons(
-  domain: string
-): Promise<CachedCouponData | null> {
-  const cacheKey = `nectar_coupons_${domain}`;
-  const result = await browser.storage.local.get([cacheKey]);
-  const cachedData = result[cacheKey] as CachedCouponData;
-
-  if (!cachedData) {
-    return null;
-  }
-
-  const now = Date.now();
-  const cacheAge = now - cachedData.timestamp;
-
-  // Check if cache is expired
-  if (cacheAge > CACHE_DURATION_MS) {
-    // Remove expired cache
-    await browser.storage.local.remove(cacheKey);
-    return null;
-  } else {
-    return cachedData;
-  }
-}
-
-/**
- * Cache coupon data
- */
-async function cacheCoupons(domain: string, coupons: Coupon[]): Promise<void> {
-  const cacheKey = `nectar_coupons_${domain}`;
-  const cachedData: CachedCouponData = {
-    coupons,
-    timestamp: Date.now(),
-  };
-
-  return browser.storage.local.set({ [cacheKey]: cachedData });
-}
-
-/**
- * Cleanup expired caches
- */
-async function cleanupExpiredCaches(): Promise<void> {
-  const items = await browser.storage.local.get();
-  const now = Date.now();
-  const keysToRemove: string[] = [];
-
-  // Check all keys that start with our prefix
-  for (const key in items) {
-    if (key.startsWith("nectar_coupons_")) {
-      const cachedData = items[key] as CachedCouponData;
-      const cacheAge = now - cachedData.timestamp;
-
-      if (cacheAge > CACHE_DURATION_MS) {
-        keysToRemove.push(key);
-      }
-    }
-  }
-
-  // Remove expired keys
-  if (keysToRemove.length > 0) {
-    await browser.storage.local.remove(keysToRemove);
-  }
-}
-
-// Run cleanup on startup
-browser.runtime.onStartup.addListener(() => {
-  cleanupExpiredCaches();
-});
-
-// Set up a periodic cleanup using alarms
-browser.alarms.create("cleanupCache", { periodInMinutes: 24 * 60 }); // Once per day
-browser.alarms.onAlarm.addListener((alarm: any) => {
-  if (alarm.name === "cleanupCache") {
-    cleanupExpiredCaches();
-  }
-});
 
 /**
  * Fetch coupons for a domain using the browser API
@@ -349,7 +246,7 @@ async function processCoupons(
   modalUrls: (string | null)[]
 ): Promise<Coupon[]> {
   const completeCoupons = [...basicCoupons];
-  const batchSize = 10; // Process this many coupons in parallel
+  const batchSize = 5; // Process this many coupons in parallel
 
   // Create additional tabs for parallel processing
   const tabs: number[] = [tabId];
