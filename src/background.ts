@@ -348,19 +348,58 @@ async function processCoupons(
   basicCoupons: Coupon[],
   modalUrls: (string | null)[]
 ): Promise<Coupon[]> {
-  const couponPromises = basicCoupons.map(async (coupon, i) => {
-    if (modalUrls[i]) {
+  const completeCoupons = [...basicCoupons];
+  const batchSize = 10; // Process this many coupons in parallel
+
+  // Create additional tabs for parallel processing
+  const tabs: number[] = [tabId];
+  for (let i = 1; i < batchSize; i++) {
+    const newTab = await createTabAsync("about:blank");
+    tabs.push(newTab.id as number);
+  }
+
+  try {
+    // Process in batches
+    for (let i = 0; i < basicCoupons.length; i += batchSize) {
+      const batch = [];
+
+      // Create promises for this batch
+      for (let j = 0; j < batchSize && i + j < basicCoupons.length; j++) {
+        const couponIndex = i + j;
+        if (modalUrls[couponIndex]) {
+          batch.push(
+            getCouponCodeFromModal(tabs[j], modalUrls[couponIndex] as string)
+              .then((code) => {
+                completeCoupons[couponIndex] = {
+                  ...completeCoupons[couponIndex],
+                  code,
+                };
+              })
+              .catch((error) => {
+                console.error(
+                  `Error fetching code for coupon ${completeCoupons[couponIndex].id}:`,
+                  error
+                );
+              })
+          );
+        }
+      }
+
+      // Wait for this batch to complete before starting next batch
+      await Promise.all(batch);
+    }
+
+    return completeCoupons;
+  } finally {
+    // Clean up the extra tabs we created
+    for (let i = 1; i < tabs.length; i++) {
       try {
-        const code = await getCouponCodeFromModal(tabId, modalUrls[i]);
-        return { ...coupon, code };
-      } catch (error) {
-        console.error(`Error fetching code for coupon ${coupon.id}:`, error);
+        await closeTabAsync(tabs[i]);
+      } catch (e) {
+        console.error("Error closing tab:", e);
       }
     }
-    return coupon;
-  });
-
-  return Promise.all(couponPromises);
+  }
 }
 
 /**
