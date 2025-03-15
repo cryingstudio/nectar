@@ -6,6 +6,7 @@ interface Coupon {
   discount: string;
   terms: string;
   verified: boolean;
+  source?: string;
 }
 
 interface ApplyResult {
@@ -15,10 +16,133 @@ interface ApplyResult {
   error?: string;
 }
 
-const COUPON_SOURCE_URL = "https://couponfollow.com/site/";
+interface CouponSource {
+  name: string;
+  baseUrl: string;
+  siteUrl: (domain: string) => string;
+  extractBasicCouponData: (tabId: number) => Promise<{
+    basicCoupons: Coupon[];
+    modalUrls: (string | null)[];
+  }>;
+  getCouponCodeFromModal: (tabId: number, modalUrl: string) => Promise<string>;
+  permissionOrigins: string[];
+}
+
+// API configuration
 const API_BASE_URL = "https://nectar-db.vercel.app/api"; // Replace with your Vercel URL
 
-// Extension initialization and content script registration remains the same
+// Define CouponFollow as a source
+const couponFollowSource: CouponSource = {
+  name: "CouponFollow",
+  baseUrl: "https://couponfollow.com",
+  siteUrl: (domain: string) => `https://couponfollow.com/site/${domain}`,
+  permissionOrigins: ["https://couponfollow.com/*"],
+
+  extractBasicCouponData: async (tabId: number) => {
+    const extractionScript = () => {
+      const basicCoupons: any[] = [];
+      const modalUrls: (string | null)[] = [];
+      let idCounter = 1;
+
+      const couponElements = document.querySelectorAll(
+        ".offer-card.regular-offer"
+      );
+
+      couponElements.forEach((element: Element) => {
+        // Check if it's a coupon with a code
+        const dataType = element.getAttribute("data-type");
+
+        // Only process elements with data-type === "coupon"
+        if (dataType === "coupon") {
+          const discountEl = element.querySelector(".offer-title");
+          const termsEl = element.querySelector(".offer-description");
+
+          const discount = discountEl?.textContent?.trim() || "Discount";
+          const terms = termsEl?.textContent?.trim() || "Terms apply";
+          const verified = element.getAttribute("data-is-verified") === "True";
+
+          // Default code
+          let code = "AUTOMATIC";
+          let modalUrl = null;
+
+          // Look for a code element directly in the DOM
+          const codeEl = element.querySelector(".coupon-code");
+          if (codeEl) {
+            code = codeEl.textContent?.trim() || code;
+          } else {
+            // Get the modal URL for later processing
+            modalUrl = element.getAttribute("data-modal");
+          }
+
+          basicCoupons.push({
+            id: idCounter++,
+            code,
+            discount,
+            terms,
+            verified,
+            source: "CouponFollow",
+          });
+
+          modalUrls.push(modalUrl);
+        }
+      });
+
+      return { basicCoupons, modalUrls };
+    };
+
+    // Execute the script in the tab
+    const results = await browser.scripting.executeScript({
+      target: { tabId },
+      func: extractionScript,
+    });
+
+    if (!results || results.length === 0) {
+      return {
+        basicCoupons: [],
+        modalUrls: [],
+      };
+    }
+
+    return results[0].result as {
+      basicCoupons: Coupon[];
+      modalUrls: (string | null)[];
+    };
+  },
+
+  getCouponCodeFromModal: async (tabId: number, modalUrl: string) => {
+    // Extract the coupon ID from the URL
+    const couponId = modalUrl.split("#")[1];
+
+    if (!couponId) {
+      return "AUTOMATIC";
+    }
+
+    // Navigate to the URL
+    await navigateTabAsync(tabId, modalUrl);
+    await refreshTabAsync(tabId);
+
+    // Try to find the code
+    const code = await extractCouponCodeFromPage(tabId);
+
+    if (code) {
+      return code;
+    }
+
+    // If not found, try an alternative approach
+    await navigateTabAsync(tabId, `https://couponfollow.com/site/amazon.co.uk`);
+    const dataCode = await extractCouponDataFromPage(tabId, couponId);
+
+    return dataCode || "AUTOMATIC";
+  },
+};
+
+// Collection of all sources
+const couponSources: CouponSource[] = [couponFollowSource];
+
+// Define a default source
+let defaultSource = couponFollowSource;
+
+// Extension initialization and content script registration
 browser.runtime.onInstalled.addListener(() => {
   console.log("Nectar extension installed!");
   browser.scripting
@@ -37,20 +161,37 @@ browser.runtime.onInstalled.addListener(() => {
 browser.runtime.onMessage.addListener((message: any, sender: any) => {
   switch (message.action) {
     case "scrapeCoupons":
-      return handleScrapeCoupons(message.domain);
+      return handleScrapeCoupons(message.domain, message.source);
     case "couponInputDetected":
       return handleCouponInputDetected(sender);
     case "couponTestingComplete":
       return handleCouponTestingComplete(message, sender);
+    case "setDefaultSource":
+      return handleSetDefaultSource(message.sourceName);
     default:
       return undefined;
   }
 });
 
-// Modified to use Supabase via Vercel API
-async function handleScrapeCoupons(domain: string) {
+// Handle setting the default coupon source
+function handleSetDefaultSource(sourceName: string) {
+  const source = couponSources.find((s) => s.name === sourceName);
+  if (source) {
+    defaultSource = source;
+    return { success: true, message: `Default source set to ${sourceName}` };
+  }
+  return { success: false, message: `Source '${sourceName}' not found` };
+}
+
+// Modified to use Supabase via Vercel API and support multiple sources
+async function handleScrapeCoupons(domain: string, sourceName?: string) {
   try {
-    // Fetch coupons from API
+    // Determine which source to use
+    const source = sourceName
+      ? couponSources.find((s) => s.name === sourceName) || defaultSource
+      : defaultSource;
+
+    // Fetch coupons from API first
     const response = await fetch(
       `${API_BASE_URL}/coupons?domain=${encodeURIComponent(domain)}`
     );
@@ -61,7 +202,7 @@ async function handleScrapeCoupons(domain: string) {
       return { success: true, coupons };
     } else {
       // Scrape and store
-      const newCoupons = await fetchCouponsWithBrowserAPI(domain);
+      const newCoupons = await fetchCouponsWithBrowserAPI(domain, source);
       const storeResponse = await fetch(`${API_BASE_URL}/coupons`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -105,6 +246,7 @@ async function handleCouponInputDetected(sender: any) {
     return { success: false, error: (error as Error).message };
   }
 }
+
 /**
  * Handle coupon testing results from content script
  */
@@ -182,14 +324,21 @@ async function showNotification({
 /**
  * Fetch coupons for a domain using the browser API
  */
-async function fetchCouponsWithBrowserAPI(domain: string): Promise<Coupon[]> {
+async function fetchCouponsWithBrowserAPI(
+  domain: string,
+  source: CouponSource
+): Promise<Coupon[]> {
   try {
-    const couponUrl = `${COUPON_SOURCE_URL}${domain}`;
+    const couponUrl = source.siteUrl(domain);
 
     // Request permission if needed
-    const hasPermission = await ensureCouponSitePermission();
+    const hasPermission = await ensureCouponSitePermission(
+      source.permissionOrigins
+    );
     if (!hasPermission) {
-      throw new Error("Permission denied for fetching coupons");
+      throw new Error(
+        `Permission denied for fetching coupons from ${source.name}`
+      );
     }
 
     // Create a new tab to load the page
@@ -199,7 +348,7 @@ async function fetchCouponsWithBrowserAPI(domain: string): Promise<Coupon[]> {
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Extract coupon data
-    const { basicCoupons, modalUrls } = await extractBasicCouponDataFromTab(
+    const { basicCoupons, modalUrls } = await source.extractBasicCouponData(
       tab.id as number
     );
 
@@ -207,7 +356,8 @@ async function fetchCouponsWithBrowserAPI(domain: string): Promise<Coupon[]> {
     const completeCoupons = await processCoupons(
       tab.id as number,
       basicCoupons,
-      modalUrls
+      modalUrls,
+      source
     );
 
     // Close the tab when done
@@ -215,7 +365,10 @@ async function fetchCouponsWithBrowserAPI(domain: string): Promise<Coupon[]> {
 
     return completeCoupons;
   } catch (error) {
-    console.error("Error in fetchCouponsWithBrowserAPI:", error);
+    console.error(
+      `Error in fetchCouponsWithBrowserAPI for ${source.name}:`,
+      error
+    );
     throw error;
   }
 }
@@ -223,14 +376,14 @@ async function fetchCouponsWithBrowserAPI(domain: string): Promise<Coupon[]> {
 /**
  * Ensure we have permission to access the coupon site
  */
-async function ensureCouponSitePermission(): Promise<boolean> {
+async function ensureCouponSitePermission(origins: string[]): Promise<boolean> {
   const hasPermission = await browser.permissions.contains({
-    origins: ["https://couponfollow.com/*"],
+    origins,
   });
 
   if (!hasPermission) {
     return browser.permissions.request({
-      origins: ["https://couponfollow.com/*"],
+      origins,
     });
   }
 
@@ -243,7 +396,8 @@ async function ensureCouponSitePermission(): Promise<boolean> {
 async function processCoupons(
   tabId: number,
   basicCoupons: Coupon[],
-  modalUrls: (string | null)[]
+  modalUrls: (string | null)[],
+  source: CouponSource
 ): Promise<Coupon[]> {
   const completeCoupons = [...basicCoupons];
   const batchSize = 5; // Process this many coupons in parallel
@@ -265,7 +419,8 @@ async function processCoupons(
         const couponIndex = i + j;
         if (modalUrls[couponIndex]) {
           batch.push(
-            getCouponCodeFromModal(tabs[j], modalUrls[couponIndex] as string)
+            source
+              .getCouponCodeFromModal(tabs[j], modalUrls[couponIndex] as string)
               .then((code) => {
                 completeCoupons[couponIndex] = {
                   ...completeCoupons[couponIndex],
@@ -297,114 +452,6 @@ async function processCoupons(
       }
     }
   }
-}
-
-/**
- * Extract basic coupon data from the coupon page
- */
-async function extractBasicCouponDataFromTab(tabId: number): Promise<{
-  basicCoupons: Coupon[];
-  modalUrls: (string | null)[];
-}> {
-  const extractionScript = () => {
-    const basicCoupons: any[] = [];
-    const modalUrls: (string | null)[] = [];
-    let idCounter = 1;
-
-    const couponElements = document.querySelectorAll(
-      ".offer-card.regular-offer"
-    );
-
-    couponElements.forEach((element: Element) => {
-      // Check if it's a coupon with a code
-      const dataType = element.getAttribute("data-type");
-
-      // Only process elements with data-type === "coupon"
-      if (dataType === "coupon") {
-        const discountEl = element.querySelector(".offer-title");
-        const termsEl = element.querySelector(".offer-description");
-
-        const discount = discountEl?.textContent?.trim() || "Discount";
-        const terms = termsEl?.textContent?.trim() || "Terms apply";
-        const verified = element.getAttribute("data-is-verified") === "True";
-
-        // Default code
-        let code = "AUTOMATIC";
-        let modalUrl = null;
-
-        // Look for a code element directly in the DOM
-        const codeEl = element.querySelector(".coupon-code");
-        if (codeEl) {
-          code = codeEl.textContent?.trim() || code;
-        } else {
-          // Get the modal URL for later processing
-          modalUrl = element.getAttribute("data-modal");
-        }
-
-        basicCoupons.push({
-          id: idCounter++,
-          code,
-          discount,
-          terms,
-          verified,
-        });
-
-        modalUrls.push(modalUrl);
-      }
-    });
-
-    return { basicCoupons, modalUrls };
-  };
-
-  // Execute the script in the tab
-  const results = await browser.scripting.executeScript({
-    target: { tabId },
-    func: extractionScript,
-  });
-
-  if (!results || results.length === 0) {
-    return {
-      basicCoupons: [],
-      modalUrls: [],
-    };
-  }
-
-  return results[0].result as {
-    basicCoupons: Coupon[];
-    modalUrls: (string | null)[];
-  };
-}
-
-/**
- * Get coupon code from a modal
- */
-async function getCouponCodeFromModal(
-  tabId: number,
-  modalUrl: string
-): Promise<string> {
-  // Extract the coupon ID from the URL
-  const couponId = modalUrl.split("#")[1];
-
-  if (!couponId) {
-    return "AUTOMATIC";
-  }
-
-  // Navigate to the URL
-  await navigateTabAsync(tabId, modalUrl);
-  await refreshTabAsync(tabId);
-
-  // Try to find the code
-  const code = await extractCouponCodeFromPage(tabId);
-
-  if (code) {
-    return code;
-  }
-
-  // If not found, try an alternative approach
-  await navigateTabAsync(tabId, `https://couponfollow.com/site/amazon.co.uk`);
-  const dataCode = await extractCouponDataFromPage(tabId, couponId);
-
-  return dataCode || "AUTOMATIC";
 }
 
 /**
@@ -444,7 +491,6 @@ async function extractCouponCodeFromPage(
         }
       }
     }
-
     return null;
   };
 
@@ -575,3 +621,16 @@ async function navigateTabAsync(tabId: number, url: string): Promise<void> {
     }, 500);
   });
 }
+
+// Example of how to add a new coupon source
+/*
+function addCouponSource(newSource: CouponSource): boolean {
+  // Check if source already exists
+  if (couponSources.some(source => source.name === newSource.name)) {
+    return false;
+  }
+  
+  couponSources.push(newSource);
+  return true;
+}
+*/
