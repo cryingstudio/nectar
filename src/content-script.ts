@@ -92,6 +92,7 @@ function initialize() {
   const couponInputs = findCouponInputs();
 
   if (couponInputs.length === 0) {
+    console.error("No coupon fields found.");
     return; // No coupon fields found
   }
 

@@ -9,13 +9,6 @@ interface Coupon {
   source?: string;
 }
 
-interface ApplyResult {
-  code: string;
-  success: boolean;
-  savings: number | null;
-  error?: string;
-}
-
 interface CouponSource {
   name: string;
   baseUrl: string;
@@ -30,6 +23,8 @@ interface CouponSource {
 
 // API configuration
 const API_BASE_URL = "https://nectar-db.vercel.app/api"; // Replace with your Vercel URL
+
+const allowSavingToDatabase = false;
 
 // Define CouponFollow as a source
 const couponFollowSource: CouponSource = {
@@ -52,39 +47,32 @@ const couponFollowSource: CouponSource = {
         // Check if it's a coupon with a code
         const dataType = element.getAttribute("data-type");
 
-        // Only process elements with data-type === "coupon"
-        if (dataType === "coupon") {
-          const discountEl = element.querySelector(".offer-title");
-          const termsEl = element.querySelector(".offer-description");
-
-          const discount = discountEl?.textContent?.trim() || "Discount";
-          const terms = termsEl?.textContent?.trim() || "Terms apply";
-          const verified = element.getAttribute("data-is-verified") === "True";
-
-          // Default code
-          let code = "AUTOMATIC";
-          let modalUrl = null;
-
-          // Look for a code element directly in the DOM
-          const codeEl = element.querySelector(".coupon-code");
-          if (codeEl) {
-            code = codeEl.textContent?.trim() || code;
-          } else {
-            // Get the modal URL for later processing
-            modalUrl = element.getAttribute("data-modal");
-          }
-
-          basicCoupons.push({
-            id: idCounter++,
-            code,
-            discount,
-            terms,
-            verified,
-            source: "CouponFollow",
-          });
-
-          modalUrls.push(modalUrl);
+        if (dataType !== "coupon") {
+          return;
         }
+
+        // Only process elements with data-type === "coupon"
+        const discountEl = element.querySelector(".offer-title");
+        const termsEl = element.querySelector(".offer-description");
+
+        const discount = discountEl?.textContent?.trim() || "Discount";
+        const terms = termsEl?.textContent?.trim() || "Terms apply";
+        const verified = element.getAttribute("data-is-verified") === "True";
+
+        // Default code
+        let code = "AUTOMATIC";
+        let modalUrl = element.getAttribute("data-modal");
+
+        basicCoupons.push({
+          id: idCounter++,
+          code,
+          discount,
+          terms,
+          verified,
+          source: "CouponFollow",
+        });
+
+        modalUrls.push(modalUrl);
       });
 
       return { basicCoupons, modalUrls };
@@ -110,13 +98,6 @@ const couponFollowSource: CouponSource = {
   },
 
   getCouponCodeFromModal: async (tabId: number, modalUrl: string) => {
-    // Extract the coupon ID from the URL
-    const couponId = modalUrl.split("#")[1];
-
-    if (!couponId) {
-      return "AUTOMATIC";
-    }
-
     // Navigate to the URL
     await navigateTabAsync(tabId, modalUrl);
     await refreshTabAsync(tabId);
@@ -124,15 +105,11 @@ const couponFollowSource: CouponSource = {
     // Try to find the code
     const code = await extractCouponCodeFromPage(tabId);
 
-    if (code) {
-      return code;
+    if (!code) {
+      return "AUTOMATIC";
     }
 
-    // If not found, try an alternative approach
-    await navigateTabAsync(tabId, `https://couponfollow.com/site/amazon.co.uk`);
-    const dataCode = await extractCouponDataFromPage(tabId, couponId);
-
-    return dataCode || "AUTOMATIC";
+    return code;
   },
 };
 
@@ -140,7 +117,7 @@ const couponFollowSource: CouponSource = {
 const couponSources: CouponSource[] = [couponFollowSource];
 
 // Define a default source
-let defaultSource = couponFollowSource;
+let defaultSource = couponSources[0];
 
 // Extension initialization and content script registration
 browser.runtime.onInstalled.addListener(() => {
@@ -158,167 +135,52 @@ browser.runtime.onInstalled.addListener(() => {
 });
 
 // Message handler
-browser.runtime.onMessage.addListener((message: any, sender: any) => {
+browser.runtime.onMessage.addListener((message: any) => {
   switch (message.action) {
     case "scrapeCoupons":
-      return handleScrapeCoupons(message.domain, message.source);
-    case "couponInputDetected":
-      return handleCouponInputDetected(sender);
-    case "couponTestingComplete":
-      return handleCouponTestingComplete(message, sender);
-    case "setDefaultSource":
-      return handleSetDefaultSource(message.sourceName);
+      return handleScrapeCoupons(message.domain);
     default:
       return undefined;
   }
 });
 
-// Handle setting the default coupon source
-function handleSetDefaultSource(sourceName: string) {
-  const source = couponSources.find((s) => s.name === sourceName);
-  if (source) {
-    defaultSource = source;
-    return { success: true, message: `Default source set to ${sourceName}` };
-  }
-  return { success: false, message: `Source '${sourceName}' not found` };
-}
-
 // Modified to use Supabase via Vercel API and support multiple sources
-async function handleScrapeCoupons(domain: string, sourceName?: string) {
+async function handleScrapeCoupons(domain: string) {
   try {
-    // Determine which source to use
-    const source = sourceName
-      ? couponSources.find((s) => s.name === sourceName) || defaultSource
-      : defaultSource;
-
     // Fetch coupons from API first
     const response = await fetch(
       `${API_BASE_URL}/coupons?domain=${encodeURIComponent(domain)}`
     );
+
     if (!response.ok) throw new Error("Failed to fetch coupons");
+
     const { coupons } = await response.json();
 
     if (coupons.length > 0) {
       return { success: true, coupons };
     } else {
       // Scrape and store
-      const newCoupons = await fetchCouponsWithBrowserAPI(domain, source);
-      const storeResponse = await fetch(`${API_BASE_URL}/coupons`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain, coupons: newCoupons }),
-      });
-      if (!storeResponse.ok) throw new Error("Failed to store coupons");
+      const newCoupons = await fetchCouponsWithBrowserAPI(
+        domain,
+        defaultSource
+      );
+
+      if (allowSavingToDatabase) {
+        const storeResponse = await fetch(`${API_BASE_URL}/coupons`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ domain, coupons: newCoupons }),
+        });
+
+        if (!storeResponse.ok) throw new Error("Failed to store coupons");
+      }
+
       return { success: true, coupons: newCoupons };
     }
   } catch (error) {
     console.error("Error handling scrape coupons:", error);
     return { success: false, error: (error as Error).message };
   }
-}
-
-// Modified to use API
-async function handleCouponInputDetected(sender: any) {
-  try {
-    if (!sender.tab?.url) throw new Error("No URL provided");
-    const domain = new URL(sender.tab.url).hostname;
-
-    // Fetch coupons from API
-    const response = await fetch(
-      `${API_BASE_URL}/coupons?domain=${encodeURIComponent(domain)}`
-    );
-    if (!response.ok) throw new Error("Failed to fetch coupons");
-    const { coupons } = await response.json();
-
-    if (coupons.length === 0) {
-      return { success: false, message: "No coupons found for this site" };
-    }
-
-    if (sender.tab?.id !== undefined) {
-      await browser.tabs.sendMessage(sender.tab.id, {
-        action: "startCouponTesting",
-        coupons,
-      });
-    }
-    return { success: true, message: "Starting coupon testing" };
-  } catch (error) {
-    console.error("Error processing auto-apply:", error);
-    return { success: false, error: (error as Error).message };
-  }
-}
-
-/**
- * Handle coupon testing results from content script
- */
-async function handleCouponTestingComplete(message: any, sender: any) {
-  try {
-    const results = message.results as ApplyResult[];
-    const bestResult = findBestCouponResult(results);
-
-    if (bestResult.success && sender.tab?.id !== undefined) {
-      // Apply the best coupon
-      await browser.tabs.sendMessage(sender.tab.id, {
-        action: "applyBestCoupon",
-        code: bestResult.code,
-      });
-
-      // Show success notification
-      await showNotification({
-        title: "Nectar",
-        message: `Applied the best coupon: ${bestResult.code} (saved ${bestResult.savings})`,
-      });
-    } else {
-      // Show failure notification
-      await showNotification({
-        title: "Nectar",
-        message: "No working coupons found for this site.",
-      });
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error("Error handling coupon testing complete:", error);
-    return { success: false, error: (error as Error).message };
-  }
-}
-
-/**
- * Find the best coupon result from all tested coupons
- */
-function findBestCouponResult(results: ApplyResult[]): ApplyResult {
-  return results.reduce(
-    (best, current) => {
-      if (current.success && current.savings !== null) {
-        if (
-          !best.success ||
-          best.savings === null ||
-          current.savings > best.savings
-        ) {
-          return current;
-        }
-      }
-      return best;
-    },
-    { success: false, savings: null, code: "" } as ApplyResult
-  );
-}
-
-/**
- * Show a notification to the user
- */
-async function showNotification({
-  title,
-  message,
-}: {
-  title: string;
-  message: string;
-}) {
-  return browser.notifications.create({
-    type: "basic",
-    iconUrl: "icon128.png",
-    title,
-    message,
-  });
 }
 
 /**
@@ -335,6 +197,7 @@ async function fetchCouponsWithBrowserAPI(
     const hasPermission = await ensureCouponSitePermission(
       source.permissionOrigins
     );
+
     if (!hasPermission) {
       throw new Error(
         `Permission denied for fetching coupons from ${source.name}`
@@ -392,6 +255,7 @@ async function ensureCouponSitePermission(origins: string[]): Promise<boolean> {
 
 /**
  * Process coupons to get their codes
+ * ?? NEEDS REFACTORING
  */
 async function processCoupons(
   tabId: number,
@@ -459,81 +323,24 @@ async function processCoupons(
  */
 async function extractCouponCodeFromPage(
   tabId: number
-): Promise<string | null> {
+): Promise<string | undefined> {
   const extractCodeScript = () => {
     // Try various selectors
-    const specificSelectors = [
-      "input#code.input.code",
-      "input.input.code",
-      "#coupon-modal input",
-      "[data-select-code]",
-      "input[value^='BOOT']",
-      "input[value]",
-    ];
+    const specificSelectors = ["input#code.input.code", "input.input.code"];
 
     // Try the specific selectors first
     for (const selector of specificSelectors) {
       const element = document.querySelector(selector);
-      if (element) {
-        const value = (element as HTMLInputElement).value.trim();
-        return value;
+      if (!element) {
+        continue;
       }
-    }
 
-    // If that doesn't work, analyze the whole page for any inputs
-    const allInputs = document.querySelectorAll("input");
-
-    for (const input of allInputs) {
-      if (input.value) {
-        // If it looks like a coupon code (uppercase letters/numbers)
-        if (/^[A-Z0-9]+$/.test(input.value.trim())) {
-          return input.value.trim();
-        }
-      }
+      const value = (element as HTMLInputElement).value.trim();
+      return value;
     }
-    return null;
   };
 
   return executeScriptInTab(tabId, extractCodeScript);
-}
-
-/**
- * Extract coupon data from the page based on coupon ID
- */
-async function extractCouponDataFromPage(
-  tabId: number,
-  couponId: string
-): Promise<string | null> {
-  const extractDataScript = () => {
-    // Look for any data attributes that might contain our coupon ID
-    const couponElements = document.querySelectorAll(
-      `[data-id="${couponId}"], [data-coupon-id="${couponId}"]`
-    );
-
-    for (const element of couponElements) {
-      // Check for data attributes that might contain the code
-      const possibleCodeAttrs = ["data-code", "data-coupon-code", "data-value"];
-      for (const attr of possibleCodeAttrs) {
-        const code = element.getAttribute(attr);
-        if (code) {
-          return code;
-        }
-      }
-
-      // Check for a code inside the element
-      const codeElement = element.querySelector(".coupon-code, .code");
-      if (codeElement) {
-        const code = codeElement.textContent?.trim();
-        if (code) {
-          return code;
-        }
-      }
-    }
-
-    return null;
-  };
-
-  return executeScriptInTab(tabId, extractDataScript);
 }
 
 // Utility functions
@@ -563,10 +370,12 @@ async function refreshTabAsync(tabId: number): Promise<void> {
       updatedTabId: number,
       changeInfo: browser.Tabs.OnUpdatedChangeInfoType
     ) => {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
-        browser.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
+      if (!isTabLoaded(updatedTabId, changeInfo, tabId)) {
+        return;
       }
+
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      resolve();
     };
 
     browser.tabs.onUpdated.addListener(onUpdated);
@@ -606,10 +415,12 @@ async function navigateTabAsync(tabId: number, url: string): Promise<void> {
       updatedTabId: number,
       changeInfo: browser.Tabs.OnUpdatedChangeInfoType
     ) => {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
-        browser.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
+      if (!isTabLoaded(updatedTabId, changeInfo, tabId)) {
+        return;
       }
+
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      resolve();
     };
 
     browser.tabs.onUpdated.addListener(onUpdated);
@@ -620,6 +431,14 @@ async function navigateTabAsync(tabId: number, url: string): Promise<void> {
       resolve();
     }, 500);
   });
+}
+
+function isTabLoaded(
+  updatedTabId: number,
+  changeInfo: browser.Tabs.OnUpdatedChangeInfoType,
+  tabId: number
+): boolean {
+  return updatedTabId === tabId && changeInfo.status === "complete";
 }
 
 // Example of how to add a new coupon source
