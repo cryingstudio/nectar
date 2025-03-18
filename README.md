@@ -2,30 +2,14 @@
 
 ## 🍯 What is Nectar?
 
-Nectar is a powerful browser extension that automatically finds and tests coupon codes while you shop online. Stop wasting time searching for coupon codes - Nectar lets you apply them with a single click.
+Nectar is a powerful browser extension that automatically finds coupon codes while you shop online. Stop wasting time searching for coupon codes - Nectar lets you find them with a single click.
 
 ## ✨ Features
 
 - **Automatic Coupon Detection**: Instantly identifies available coupon codes for the site you're browsing
 - **Verified Coupons**: Shows which coupons have been verified to work recently
-- **One-Click Apply**: Apply coupon codes directly to checkout forms with a single click
-- **Success Rate Tracking**: See which codes have the highest success rate from other users
 - **Clean, Minimalist UI**: Beautiful interface that doesn't get in your way
 - **Regular Updates**: Coupon database is refreshed frequently to ensure you get the latest deals
-
-## 📦 Installation
-
-### Chrome Web Store
-
-1. Visit the [Nectar page on the Chrome Web Store](https://chrome.google.com/webstore/detail/nectar/[extension-id])
-2. Click "Add to Chrome"
-3. Confirm the installation
-
-### Firefox Add-ons
-
-1. Visit the [Nectar page on Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/nectar-coupon-finder/)
-2. Click "Add to Firefox"
-3. Confirm the installation
 
 ### Manual Installation (Development)
 
@@ -53,7 +37,6 @@ See the [Development](#development) section below.
 
    ```bash
    git clone https://github.com/yourusername/nectar-extension.git
-   cd nectar-extension
    ```
 
 2. Install dependencies:
@@ -103,7 +86,3 @@ nectar-extension/
 - [Tailwind CSS](https://tailwindcss.com/) - Styling
 - [shadcn/ui](https://ui.shadcn.com/) - UI components
 - [Chrome Extension API](https://developer.chrome.com/docs/extensions/reference/) - Browser integration
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
