@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { SettingsMenu } from "./settings";
 
 interface Coupon {
   id: number;
@@ -15,14 +16,45 @@ interface Coupon {
   verified: boolean;
 }
 
+interface ExtensionSettings {
+  defaultSource: string;
+  enableNotifications: boolean;
+  refreshInterval: number;
+  autoApplyCoupons: boolean;
+  saveToDatabase: boolean;
+  customSources: {
+    id: string;
+    name: string;
+    baseUrl: string;
+  }[];
+}
+
 export default function NectarExtension() {
   const [currentSite, setCurrentSite] = useState("");
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Default settings
+  const [settings, setSettings] = useState<ExtensionSettings>({
+    defaultSource: "CouponFollow",
+    enableNotifications: true,
+    refreshInterval: 24,
+    autoApplyCoupons: false,
+    saveToDatabase: true,
+    customSources: [],
+  });
 
   useEffect(() => {
+    // Load settings from storage
+    chrome.storage.sync.get(["nectarSettings"], (result) => {
+      if (result.nectarSettings) {
+        setSettings(result.nectarSettings);
+      }
+    });
+
     const getCurrentSiteAndCoupons = async () => {
       try {
         setLoading(true);
@@ -43,7 +75,15 @@ export default function NectarExtension() {
 
           // Message the background script to fetch the coupons
           chrome.runtime.sendMessage(
-            { action: "scrapeCoupons", domain },
+            {
+              action: "scrapeCoupons",
+              domain,
+              // Pass settings to background script
+              settings: {
+                defaultSource: settings.defaultSource,
+                saveToDatabase: settings.saveToDatabase,
+              },
+            },
             (response) => {
               if (chrome.runtime.lastError) {
                 console.error("Runtime error:", chrome.runtime.lastError);
@@ -76,7 +116,7 @@ export default function NectarExtension() {
     };
 
     getCurrentSiteAndCoupons();
-  }, []);
+  }, [settings.defaultSource, settings.saveToDatabase]);
 
   const handleCopy = (id: number, code: string) => {
     navigator.clipboard.writeText(code);
@@ -84,9 +124,32 @@ export default function NectarExtension() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const handleSaveSettings = (newSettings: ExtensionSettings) => {
+    setSettings(newSettings);
+    chrome.storage.sync.set({ nectarSettings: newSettings });
+
+    // If auto-apply setting changed, notify background script
+    if (newSettings.autoApplyCoupons !== settings.autoApplyCoupons) {
+      chrome.runtime.sendMessage({
+        action: "updateAutoApply",
+        autoApply: newSettings.autoApplyCoupons,
+      });
+    }
+  };
+
+  if (showSettings) {
+    return (
+      <SettingsMenu
+        onClose={() => setShowSettings(false)}
+        onSave={handleSaveSettings}
+        currentSettings={settings}
+      />
+    );
+  }
+
   return (
     <Card className="border border-neutral-800 bg-neutral-900 shadow-xl overflow-hidden w-[350px] rounded-3xl">
-      <div className="pl-4 flex items-center justify-between">
+      <div className="pl-4 pr-4 flex items-center justify-between">
         <div className="flex flex-col">
           <h1 className="text-2xl font-bold text-white flex items-center">
             Nectar
@@ -99,6 +162,14 @@ export default function NectarExtension() {
             {currentSite ? <b>{currentSite}</b> : "this site"}
           </p>
         </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-neutral-400 hover:text-white hover:bg-neutral-800"
+          onClick={() => setShowSettings(true)}
+        >
+          <Settings className="h-1 w-1" />
+        </Button>
       </div>
 
       <Separator className="bg-neutral-800" />
