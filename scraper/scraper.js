@@ -207,29 +207,6 @@ async function scrapeCoupons(domain) {
         `Processing ${totalCoupons} coupons in ${totalBatches} batches of ${batchSize}`
       );
 
-      // Pre-create a pool of pages to reuse for each batch
-      const pagePool = [];
-      for (let i = 0; i < batchSize; i++) {
-        const modalPage = await browser.newPage();
-        await modalPage.setUserAgent(
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
-        );
-        await modalPage.setJavaScriptEnabled(true);
-
-        // Additional anti-detection measures for modal page
-        await modalPage.evaluateOnNewDocument(() => {
-          Object.defineProperty(navigator, "webdriver", {
-            get: () => false,
-          });
-          window.navigator.chrome = { runtime: {} };
-          window.navigator.permissions = {
-            query: () => Promise.resolve({ state: "granted" }),
-          };
-        });
-
-        pagePool.push(modalPage);
-      }
-
       // Process in batches
       for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
         const startIndex = batchIndex * batchSize;
@@ -244,6 +221,28 @@ async function scrapeCoupons(domain) {
 
         // Process this batch in parallel
         const batchPromises = [];
+        // Create a fresh page for this batch
+        const pagePool = [];
+        for (let i = 0; i < currentBatchSize; i++) {
+          const modalPage = await browser.newPage();
+          await modalPage.setUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
+          );
+          await modalPage.setJavaScriptEnabled(true);
+
+          // Additional anti-detection measures for modal page
+          await modalPage.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, "webdriver", {
+              get: () => false,
+            });
+            window.navigator.chrome = { runtime: {} };
+            window.navigator.permissions = {
+              query: () => Promise.resolve({ state: "granted" }),
+            };
+          });
+
+          pagePool.push(modalPage);
+        }
 
         for (let i = 0; i < currentBatchSize; i++) {
           const couponIndex = startIndex + i;
@@ -283,7 +282,7 @@ async function scrapeCoupons(domain) {
                 // Wait for potential code input fields to load
                 try {
                   await modalPage.waitForSelector(
-                    "input#code.input.code, input.input.code",
+                    "input#code.input.code, input.input.code, .coupon-code, .code-text, [data-clipboard-text], [data-code]",
                     {
                       timeout: 5000,
                     }
@@ -294,6 +293,9 @@ async function scrapeCoupons(domain) {
                     "WARN"
                   );
                 }
+
+                // Add a small delay to ensure dynamic content is loaded
+                await modalPage.waitForTimeout(1000);
 
                 // Extract the code from the modal using multiple approaches
                 const code = await modalPage.evaluate(() => {
@@ -332,10 +334,48 @@ async function scrapeCoupons(domain) {
                     }
                   }
 
-                  // Log the HTML content for debugging
-                  console.log("Modal HTML:", document.body.innerHTML);
+                  // Wait a moment and try again to ensure the DOM has been properly updated
+                  return new Promise((resolve) => {
+                    setTimeout(() => {
+                      // Try once more after a short delay
+                      for (const selector of selectors) {
+                        const element = document.querySelector(selector);
+                        if (!element) continue;
 
-                  return "AUTOMATIC"; // Default if no code found
+                        if (element.tagName === "INPUT") {
+                          const value = element.value.trim();
+                          if (value) {
+                            resolve(value);
+                            return;
+                          }
+                        } else {
+                          const clipboardText = element.getAttribute(
+                            "data-clipboard-text"
+                          );
+                          if (clipboardText) {
+                            resolve(clipboardText.trim());
+                            return;
+                          }
+
+                          const dataCode = element.getAttribute("data-code");
+                          if (dataCode) {
+                            resolve(dataCode.trim());
+                            return;
+                          }
+
+                          const textContent = element.textContent.trim();
+                          if (textContent) {
+                            resolve(textContent);
+                            return;
+                          }
+                        }
+                      }
+
+                      // If still not found, log the HTML content for debugging
+                      console.log("Modal HTML:", document.body.innerHTML);
+                      resolve("AUTOMATIC"); // Default if no code found
+                    }, 500); // Wait 500ms before trying again
+                  });
                 });
 
                 // Update the coupon with the extracted code
@@ -366,23 +406,24 @@ async function scrapeCoupons(domain) {
 
         // Wait for all modals in this batch to complete
         await Promise.all(batchPromises);
+
+        // Close all pages in this batch's pool
+        for (const modalPage of pagePool) {
+          await modalPage
+            .close()
+            .catch((err) => logError("Error closing modal page", err));
+        }
       }
 
-      // Close all pages in the pool
-      for (const modalPage of pagePool) {
-        await modalPage
-          .close()
-          .catch((err) => logError("Error closing modal page", err));
-      }
+      await log(
+        `Completed processing ${completeCoupons.length} coupons for ${domain}`
+      );
+
+      return completeCoupons;
     } catch (error) {
       logError(`Error in batch processing of modals`, error);
+      return [];
     }
-
-    await log(
-      `Completed processing ${completeCoupons.length} coupons for ${domain}`
-    );
-
-    return completeCoupons;
   } catch (error) {
     logError(`Error scraping ${domain}`, error);
     return [];
