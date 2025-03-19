@@ -198,13 +198,6 @@ async function scrapeCoupons(domain) {
             timeout: 30000,
           });
 
-          // Take screenshot of modal for debugging
-          const modalScreenshotPath = path.join(
-            LOGS_DIR,
-            `${domain.replace(/\./g, "_")}_modal_${i}.png`
-          );
-          await page.screenshot({ path: modalScreenshotPath });
-
           // Extract the code from the modal
           const code = await page.evaluate(() => {
             // Try various selectors - only using the two that worked in test script
