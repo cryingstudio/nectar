@@ -47,15 +47,6 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// List of domains to scrape
-const domains = [
-  "amazon.com",
-  "walmart.com",
-  "target.com",
-  "bestbuy.com",
-  // Add more domains as needed
-];
-
 // Configuration for scraping performance
 const CONFIG = {
   concurrentDomains: process.env.CONCURRENT_DOMAINS
@@ -75,6 +66,101 @@ const CONFIG = {
     ? parseInt(process.env.DELAY_BETWEEN_DOMAINS)
     : 1000,
 };
+
+/**
+ * Scrapes domain names from CouponFollow's category page
+ * @param {string} letter - The letter category (a-z or #) to scrape
+ * @returns {Promise<string[]>} - Array of domain names
+ */
+async function scrapeDomains(letter) {
+  await log(`Scraping domain list for letter: ${letter}...`);
+
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--disable-gpu",
+      "--window-size=1920,1080",
+      "--disable-blink-features=AutomationControlled",
+    ],
+    defaultViewport: null,
+  });
+
+  try {
+    const page = await browser.newPage();
+
+    // Set a realistic user agent
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
+    );
+
+    // Set page options similar to coupon scraper
+    await page.setJavaScriptEnabled(true);
+    await page.setExtraHTTPHeaders({
+      "Accept-Language": "en-US,en;q=0.9",
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    });
+
+    // Override webdriver properties to avoid detection
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false,
+      });
+      window.navigator.chrome = { runtime: {} };
+      window.navigator.permissions = {
+        query: () => Promise.resolve({ state: "granted" }),
+      };
+    });
+
+    page.setDefaultNavigationTimeout(CONFIG.navigationTimeout);
+
+    // Navigate to the letter's category page
+    const url = `https://couponfollow.com/site/browse/${letter}/all`;
+    await log(`Navigating to ${url}...`);
+
+    await page.goto(url, {
+      waitUntil: "networkidle2",
+      timeout: CONFIG.navigationTimeout,
+    });
+
+    await log(`Page loaded for letter ${letter}, extracting domains...`);
+
+    // Extract domain names from the page
+    const domains = await page.evaluate(() => {
+      const domainList = [];
+
+      // Each store is in a list item with a link
+      const storeLinks = document.querySelectorAll('ul li a[href^="/site/"]');
+
+      storeLinks.forEach((link) => {
+        const href = link.getAttribute("href");
+        if (href) {
+          // Extract domain from the URL format "/site/domain.com"
+          const domain = href.replace("/site/", "");
+          if (domain) {
+            domainList.push(domain);
+          }
+        }
+      });
+
+      return domainList;
+    });
+
+    await log(`Found ${domains.length} domains for letter ${letter}`);
+    return domains;
+  } catch (error) {
+    logError(`Error scraping domains for letter ${letter}`, error);
+    return [];
+  } finally {
+    await browser.close();
+  }
+}
 
 async function scrapeCoupons(domain, retryCount = 0) {
   await log(`Scraping coupons for ${domain}...`);
@@ -514,64 +600,134 @@ async function saveToDatabase(domain, coupons) {
 async function main() {
   await log("Starting coupon scraper...");
 
-  let successCount = 0;
-  let errorCount = 0;
+  // Define all alphabet letters including special characters
+  const letters = [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z",
+    "0",
+  ];
 
-  // Process domains in batches for concurrency
-  for (let i = 0; i < domains.length; i += CONFIG.concurrentDomains) {
-    const batch = domains.slice(i, i + CONFIG.concurrentDomains);
+  let totalSuccessCount = 0;
+  let totalErrorCount = 0;
+
+  // Process each letter
+  for (const letter of letters) {
+    await log(`-------------------------------------------`);
+    await log(`Starting to process domains for letter: ${letter}`);
+
+    // Get all domains for this letter
+    const domains = await scrapeDomains(letter);
+
+    if (domains.length === 0) {
+      await log(`No domains found for letter ${letter}, skipping...`, "WARN");
+      continue;
+    }
+
     await log(
-      `Processing batch of ${batch.length} domains (${i + 1}-${Math.min(
-        i + CONFIG.concurrentDomains,
-        domains.length
-      )} of ${domains.length})...`
+      `Found ${domains.length} domains for letter ${letter}, starting to scrape coupons...`
     );
 
-    const results = await Promise.all(
-      batch.map(async (domain) => {
-        try {
-          await log(`Starting processing for domain: ${domain}`);
+    let letterSuccessCount = 0;
+    let letterErrorCount = 0;
 
-          const coupons = await scrapeCoupons(domain);
+    // Process domains in batches for concurrency
+    for (let i = 0; i < domains.length; i += CONFIG.concurrentDomains) {
+      const batch = domains.slice(i, i + CONFIG.concurrentDomains);
+      await log(
+        `Processing batch of ${batch.length} domains (${i + 1}-${Math.min(
+          i + CONFIG.concurrentDomains,
+          domains.length
+        )} of ${domains.length})...`
+      );
 
-          if (coupons.length > 0) {
-            await saveToDatabase(domain, coupons);
-            await log(`Completed processing for domain: ${domain}`);
-            return { success: true, domain };
-          } else {
-            await log(`No coupons found for ${domain}`, "WARN");
-            await log(`Completed processing for domain: ${domain}`);
+      const results = await Promise.all(
+        batch.map(async (domain) => {
+          try {
+            await log(`Starting processing for domain: ${domain}`);
+
+            const coupons = await scrapeCoupons(domain);
+
+            if (coupons.length > 0) {
+              await saveToDatabase(domain, coupons);
+              await log(`Completed processing for domain: ${domain}`);
+              return { success: true, domain };
+            } else {
+              await log(`No coupons found for ${domain}`, "WARN");
+              await log(`Completed processing for domain: ${domain}`);
+              return { success: false, domain };
+            }
+          } catch (error) {
+            logError(`Failed to process domain: ${domain}`, error);
             return { success: false, domain };
           }
-        } catch (error) {
-          logError(`Failed to process domain: ${domain}`, error);
-          return { success: false, domain };
+        })
+      );
+
+      // Count successes and failures
+      results.forEach((result) => {
+        if (result.success) {
+          letterSuccessCount++;
+          totalSuccessCount++;
+        } else {
+          letterErrorCount++;
+          totalErrorCount++;
         }
-      })
+      });
+
+      // Add a delay between batches to avoid overloading resources
+      if (i + CONFIG.concurrentDomains < domains.length) {
+        await log(
+          `Waiting ${CONFIG.delayBetweenDomains}ms before next batch...`
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, CONFIG.delayBetweenDomains)
+        );
+      }
+    }
+
+    await log(
+      `Letter ${letter} completed: ${letterSuccessCount} successes, ${letterErrorCount} failures`
     );
 
-    // Count successes and failures
-    results.forEach((result) => {
-      if (result.success) successCount++;
-      else errorCount++;
-    });
-
-    // Add a delay between batches to avoid overloading resources
-    if (i + CONFIG.concurrentDomains < domains.length) {
-      await log(`Waiting ${CONFIG.delayBetweenDomains}ms before next batch...`);
-      await new Promise((resolve) =>
-        setTimeout(resolve, CONFIG.delayBetweenDomains)
-      );
+    // Add a longer delay between letters to avoid being detected as a bot
+    if (letters.indexOf(letter) < letters.length - 1) {
+      const delayBetweenLetters = CONFIG.delayBetweenDomains * 2; // Twice the domain delay
+      await log(`Waiting ${delayBetweenLetters}ms before next letter...`);
+      await new Promise((resolve) => setTimeout(resolve, delayBetweenLetters));
     }
   }
 
   await log(`----------------------------------------`);
-  await log(`Coupon scraping completed!`);
-  await log(`Successfully processed: ${successCount} domains`);
-  await log(`Failed to process: ${errorCount} domains`);
+  await log(`Full alphabet coupon scraping completed!`);
+  await log(`Successfully processed: ${totalSuccessCount} domains`);
+  await log(`Failed to process: ${totalErrorCount} domains`);
 
   // Exit with error code if all domains failed
-  if (errorCount === domains.length) {
+  if (totalSuccessCount === 0) {
     await log("All domains failed to process", "ERROR");
     process.exit(1);
   }
@@ -579,6 +735,7 @@ async function main() {
 
 // Export functions for testing
 module.exports = {
+  scrapeDomains,
   scrapeCoupons,
   saveToDatabase,
   main,
