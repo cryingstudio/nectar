@@ -77,6 +77,10 @@ async function scrapeCoupons(domain) {
 
   try {
     const page = await browser.newPage();
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
+    );
+    await page.setJavaScriptEnabled(true);
 
     // Set default navigation timeout (higher for GitHub Actions)
     page.setDefaultNavigationTimeout(120000); // 2 minutes
@@ -93,14 +97,6 @@ async function scrapeCoupons(domain) {
     });
 
     await log(`Page loaded for ${domain}, extracting coupon data...`);
-
-    // Take screenshot for debugging
-    const screenshotPath = path.join(
-      LOGS_DIR,
-      `${domain.replace(/\./g, "_")}.png`
-    );
-    await page.screenshot({ path: screenshotPath, fullPage: false });
-    await log(`Saved screenshot to ${screenshotPath}`);
 
     // Extract basic coupon data with modal URLs
     const { basicCoupons, modalUrls } = await page.evaluate(() => {
@@ -175,6 +171,10 @@ async function scrapeCoupons(domain) {
       // Create a pool of pages for processing modals
       for (let i = 0; i < Math.min(batchSize, modalUrls.length); i++) {
         const modalPage = await browser.newPage();
+        await modalPage.setUserAgent(
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
+        );
+        await modalPage.setJavaScriptEnabled(true);
         modalPage.setDefaultNavigationTimeout(60000); // 1 minute
         modalPages.push(modalPage);
       }
