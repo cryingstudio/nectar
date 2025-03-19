@@ -154,9 +154,25 @@ async function scrapeCoupons(domain) {
         const terms = termsEl?.textContent?.trim() || "Terms apply";
         const verified = element.getAttribute("data-is-verified") === "True";
 
-        // Default code (will be updated later if modal URL exists)
+        // Extract direct code if available in the element
         let code = "AUTOMATIC";
+
+        // Try to get code from clipboard data or other attributes
+        const showCodeBtn = element.querySelector(".show-code");
+        if (showCodeBtn) {
+          const dataCode =
+            showCodeBtn.getAttribute("data-code") ||
+            showCodeBtn.getAttribute("data-clipboard-text");
+          if (dataCode) {
+            code = dataCode;
+          }
+        }
+
+        // Get the direct modal URL (not the hash URL)
         const modalUrl = element.getAttribute("data-modal");
+
+        // Store element ID for debugging
+        const elementId = element.getAttribute("id");
 
         basicCoupons.push({
           id: idCounter++,
@@ -165,6 +181,7 @@ async function scrapeCoupons(domain) {
           terms,
           verified,
           source: "CouponFollow",
+          elementId, // Store element ID for reference
         });
 
         modalUrls.push(modalUrl);
@@ -198,6 +215,18 @@ async function scrapeCoupons(domain) {
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
         );
         await modalPage.setJavaScriptEnabled(true);
+
+        // Additional anti-detection measures for modal page
+        await modalPage.evaluateOnNewDocument(() => {
+          Object.defineProperty(navigator, "webdriver", {
+            get: () => false,
+          });
+          window.navigator.chrome = { runtime: {} };
+          window.navigator.permissions = {
+            query: () => Promise.resolve({ state: "granted" }),
+          };
+        });
+
         pagePool.push(modalPage);
       }
 
@@ -219,8 +248,17 @@ async function scrapeCoupons(domain) {
         for (let i = 0; i < currentBatchSize; i++) {
           const couponIndex = startIndex + i;
           const modalUrl = modalUrls[couponIndex];
+          const coupon = basicCoupons[couponIndex];
 
-          if (!modalUrl) continue;
+          // Skip if coupon already has a code or no modal URL
+          if (coupon.code !== "AUTOMATIC" || !modalUrl) {
+            await log(
+              `Skipping coupon ${
+                couponIndex + 1
+              } - already has code or no modal URL`
+            );
+            continue;
+          }
 
           // Use the appropriate page from the pool
           const modalPage = pagePool[i];
@@ -231,14 +269,34 @@ async function scrapeCoupons(domain) {
                 await log(
                   `Processing modal ${
                     couponIndex + 1
-                  }/${totalCoupons}: ${modalUrl}`
+                  }/${totalCoupons}: ${modalUrl} (Element ID: ${
+                    coupon.elementId
+                  })`
                 );
 
-                // Navigate to the modal URL
+                // Navigate directly to the modal URL (not the hash URL)
                 await modalPage.goto(modalUrl, {
-                  waitUntil: "networkidle2",
+                  waitUntil: ["load", "networkidle2", "domcontentloaded"],
                   timeout: 30000,
                 });
+
+                // Wait for potential code input fields to load
+                try {
+                  await modalPage.waitForSelector(
+                    "input#code.input.code, input.input.code",
+                    {
+                      timeout: 5000,
+                    }
+                  );
+                } catch (err) {
+                  await log(
+                    `No code input found for modal ${couponIndex + 1}`,
+                    "WARN"
+                  );
+                }
+
+                // Small delay to ensure any dynamic content is loaded
+                await modalPage.waitForTimeout(1000);
 
                 // Take screenshot of modal for debugging
                 const modalScreenshotPath = path.join(
@@ -247,22 +305,45 @@ async function scrapeCoupons(domain) {
                 );
                 await modalPage.screenshot({ path: modalScreenshotPath });
 
-                // Extract the code from the modal using the successful approach from test script
+                // Extract the code from the modal using multiple approaches
                 const code = await modalPage.evaluate(() => {
-                  // Try various selectors - only using the two that worked in test script
-                  const specificSelectors = [
+                  // Try various selectors to find the code
+                  const selectors = [
                     "input#code.input.code",
                     "input.input.code",
+                    ".coupon-code",
+                    ".code-text",
+                    "[data-clipboard-text]",
+                    "[data-code]",
                   ];
 
-                  // Try the specific selectors first
-                  for (const selector of specificSelectors) {
+                  // Try the selectors in order
+                  for (const selector of selectors) {
                     const element = document.querySelector(selector);
                     if (!element) continue;
 
-                    const value = element.value.trim();
-                    if (value) return value;
+                    // Handle different element types
+                    if (element.tagName === "INPUT") {
+                      const value = element.value.trim();
+                      if (value) return value;
+                    } else {
+                      // For non-input elements, try data attributes first
+                      const clipboardText = element.getAttribute(
+                        "data-clipboard-text"
+                      );
+                      if (clipboardText) return clipboardText.trim();
+
+                      const dataCode = element.getAttribute("data-code");
+                      if (dataCode) return dataCode.trim();
+
+                      // Last resort: use text content
+                      const textContent = element.textContent.trim();
+                      if (textContent) return textContent;
+                    }
                   }
+
+                  // Log the HTML content for debugging
+                  console.log("Modal HTML:", document.body.innerHTML);
 
                   return "AUTOMATIC"; // Default if no code found
                 });
@@ -270,10 +351,16 @@ async function scrapeCoupons(domain) {
                 // Update the coupon with the extracted code
                 if (code && code !== "AUTOMATIC") {
                   completeCoupons[couponIndex].code = code;
-                  await log(`Found code ${code} for coupon ${couponIndex + 1}`);
+                  await log(
+                    `Found code ${code} for coupon ${couponIndex + 1} (ID: ${
+                      coupon.elementId
+                    })`
+                  );
                 } else {
                   await log(
-                    `No code found for coupon ${couponIndex + 1}`,
+                    `No code found for coupon ${couponIndex + 1} (ID: ${
+                      coupon.elementId
+                    })`,
                     "WARN"
                   );
                 }
