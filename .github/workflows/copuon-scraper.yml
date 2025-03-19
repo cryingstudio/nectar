@@ -26,8 +26,8 @@ jobs:
 
       - name: Run coupon scraper
         env:
-          SUPABASE_URL: ${{ env.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ env.SUPABASE_ANON_KEY }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
         run: node scraper/scraper.js
-          echo "This is the ${{ env.SUPABASE_URL }} environment variable"
-          echo "This is the ${{ env.SUPABASE_ANON_KEY }} environment variable"
+          echo "This is the ${{ vars.SUPABASE_URL }} environment variable"
+          echo "This is the ${{ vars.SUPABASE_ANON_KEY }} environment variable"
