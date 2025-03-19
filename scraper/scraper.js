@@ -123,6 +123,16 @@ async function scrapeCoupons(domain) {
       timeout: 120000, // 2 minutes
     });
 
+    try {
+      await log(`Waiting for coupon elements to be loaded...`);
+      await page.waitForSelector(".offer-card.regular-offer", {
+        timeout: 30000,
+      });
+    } catch (error) {
+      logError(`Error waiting for coupon elements`, error);
+      // Continue anyway, as the page might have loaded but without the expected elements
+    }
+
     await log(`Page loaded for ${domain}, extracting coupon data...`);
 
     // Extract basic coupon data with modal URLs
@@ -197,6 +207,18 @@ async function scrapeCoupons(domain) {
             waitUntil: ["load", "networkidle2", "domcontentloaded"],
             timeout: 30000,
           });
+
+          try {
+            await page.waitForSelector(
+              "input#code.input.code, input.input.code",
+              {
+                timeout: 10000,
+              }
+            );
+          } catch (error) {
+            // Continue anyway as the element might not exist on this page
+            await log(`No code input found for modal ${i + 1}`, "WARN");
+          }
 
           // Extract the code from the modal
           const code = await page.evaluate(() => {
