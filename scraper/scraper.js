@@ -125,14 +125,6 @@ async function scrapeCoupons(domain) {
 
     await log(`Page loaded for ${domain}, extracting coupon data...`);
 
-    // Take screenshot for debugging
-    const screenshotPath = path.join(
-      LOGS_DIR,
-      `${domain.replace(/\./g, "_")}.png`
-    );
-    await page.screenshot({ path: screenshotPath, fullPage: false });
-    await log(`Saved screenshot to ${screenshotPath}`);
-
     // Extract basic coupon data with modal URLs
     const { basicCoupons, modalUrls } = await page.evaluate(() => {
       const basicCoupons = [];
@@ -185,22 +177,12 @@ async function scrapeCoupons(domain) {
       `Found ${basicCoupons.length} basic coupons for ${domain}, processing modal URLs...`
     );
 
-    // Save basic results to a JSON file for debugging
-    const basicResultsPath = path.join(
-      process.cwd(),
-      `${domain.replace(/\./g, "_")}_basic.json`
-    );
-    await fs.writeFile(
-      basicResultsPath,
-      JSON.stringify({ basicCoupons, modalUrls }, null, 2)
-    );
-
     // Process coupons with modal URLs to get the actual codes
     const completeCoupons = [...basicCoupons];
 
     try {
       // Process all coupons but in batches of 5
-      const batchSize = 5;
+      const batchSize = 2;
       const totalCoupons = modalUrls.length;
       const totalBatches = Math.ceil(totalCoupons / batchSize);
 
