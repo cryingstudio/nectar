@@ -54,12 +54,29 @@ const domains = [
   "target.com",
   "bestbuy.com",
   // Add more domains as needed
-].slice(
-  0,
-  process.env.DOMAIN_LIMIT ? parseInt(process.env.DOMAIN_LIMIT) : undefined
-);
+];
 
-async function scrapeCoupons(domain) {
+// Configuration for scraping performance
+const CONFIG = {
+  concurrentDomains: process.env.CONCURRENT_DOMAINS
+    ? parseInt(process.env.CONCURRENT_DOMAINS)
+    : 5,
+  batchSize: process.env.BATCH_SIZE ? parseInt(process.env.BATCH_SIZE) : 5,
+  domainRetries: process.env.DOMAIN_RETRIES
+    ? parseInt(process.env.DOMAIN_RETRIES)
+    : 2,
+  modalTimeout: process.env.MODAL_TIMEOUT
+    ? parseInt(process.env.MODAL_TIMEOUT)
+    : 15000,
+  navigationTimeout: process.env.NAVIGATION_TIMEOUT
+    ? parseInt(process.env.NAVIGATION_TIMEOUT)
+    : 30000,
+  delayBetweenDomains: process.env.DELAY_BETWEEN_DOMAINS
+    ? parseInt(process.env.DELAY_BETWEEN_DOMAINS)
+    : 1000,
+};
+
+async function scrapeCoupons(domain, retryCount = 0) {
   await log(`Scraping coupons for ${domain}...`);
 
   const browser = await puppeteer.launch({
@@ -110,7 +127,7 @@ async function scrapeCoupons(domain) {
     });
 
     // Set default navigation timeout
-    page.setDefaultNavigationTimeout(120000); // 2 minutes
+    page.setDefaultNavigationTimeout(CONFIG.navigationTimeout);
 
     // Add browser console logs to our logs
     page.on("console", (msg) =>
@@ -120,7 +137,7 @@ async function scrapeCoupons(domain) {
     await log(`Navigating to couponfollow.com for ${domain}...`);
     await page.goto(`https://couponfollow.com/site/${domain}`, {
       waitUntil: "networkidle2",
-      timeout: 120000, // 2 minutes
+      timeout: CONFIG.navigationTimeout, // 2 minutes
     });
 
     await log(`Page loaded for ${domain}, extracting coupon data...`);
@@ -198,8 +215,8 @@ async function scrapeCoupons(domain) {
     const completeCoupons = [...basicCoupons];
 
     try {
-      // Process all coupons but in batches of 5
-      const batchSize = 1;
+      // Process all coupons but in batches
+      const batchSize = CONFIG.batchSize;
       const totalCoupons = modalUrls.length;
       const totalBatches = Math.ceil(totalCoupons / batchSize);
 
@@ -275,8 +292,8 @@ async function scrapeCoupons(domain) {
 
                 // Navigate directly to the modal URL (not the hash URL)
                 await modalPage.goto(modalUrl, {
-                  waitUntil: ["load", "networkidle2", "domcontentloaded"],
-                  timeout: 30000,
+                  waitUntil: ["load", "domcontentloaded"],
+                  timeout: CONFIG.modalTimeout,
                 });
 
                 // Wait for potential code input fields to load
@@ -428,6 +445,17 @@ async function scrapeCoupons(domain) {
     }
   } catch (error) {
     logError(`Error scraping ${domain}`, error);
+    // Retry logic
+    if (retryCount < CONFIG.domainRetries) {
+      await log(
+        `Retrying ${domain} (attempt ${retryCount + 1}/${
+          CONFIG.domainRetries
+        })...`,
+        "WARN"
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait before retry
+      return scrapeCoupons(domain, retryCount + 1);
+    }
     return [];
   } finally {
     await browser.close();
@@ -489,27 +517,52 @@ async function main() {
   let successCount = 0;
   let errorCount = 0;
 
-  for (const domain of domains) {
-    try {
-      await log(`----------------------------------------`);
-      await log(`Starting processing for domain: ${domain}`);
+  // Process domains in batches for concurrency
+  for (let i = 0; i < domains.length; i += CONFIG.concurrentDomains) {
+    const batch = domains.slice(i, i + CONFIG.concurrentDomains);
+    await log(
+      `Processing batch of ${batch.length} domains (${i + 1}-${Math.min(
+        i + CONFIG.concurrentDomains,
+        domains.length
+      )} of ${domains.length})...`
+    );
 
-      const coupons = await scrapeCoupons(domain);
+    const results = await Promise.all(
+      batch.map(async (domain) => {
+        try {
+          await log(`Starting processing for domain: ${domain}`);
 
-      if (coupons.length > 0) {
-        await saveToDatabase(domain, coupons);
-        successCount++;
-      } else {
-        await log(`No coupons found for ${domain}`, "WARN");
-        errorCount++;
-      }
-    } catch (error) {
-      logError(`Failed to process domain: ${domain}`, error);
-      errorCount++;
+          const coupons = await scrapeCoupons(domain);
+
+          if (coupons.length > 0) {
+            await saveToDatabase(domain, coupons);
+            await log(`Completed processing for domain: ${domain}`);
+            return { success: true, domain };
+          } else {
+            await log(`No coupons found for ${domain}`, "WARN");
+            await log(`Completed processing for domain: ${domain}`);
+            return { success: false, domain };
+          }
+        } catch (error) {
+          logError(`Failed to process domain: ${domain}`, error);
+          return { success: false, domain };
+        }
+      })
+    );
+
+    // Count successes and failures
+    results.forEach((result) => {
+      if (result.success) successCount++;
+      else errorCount++;
+    });
+
+    // Add a delay between batches to avoid overloading resources
+    if (i + CONFIG.concurrentDomains < domains.length) {
+      await log(`Waiting ${CONFIG.delayBetweenDomains}ms before next batch...`);
+      await new Promise((resolve) =>
+        setTimeout(resolve, CONFIG.delayBetweenDomains)
+      );
     }
-
-    // Add a delay between domains to avoid rate limiting
-    await log(`Completed processing for domain: ${domain}`);
   }
 
   await log(`----------------------------------------`);

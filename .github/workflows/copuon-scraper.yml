@@ -28,4 +28,9 @@ jobs:
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          NAVIGATION_TIMEOUT: ${{ vars.NAVIGATION_TIMEOUT }}
+          MODAL_TIMEOUT: ${{ vars.MODAL_TIMEOUT }}
+          DELAY_BETWEEN_DOMAINS: ${{ vars.DELAY_BETWEEN_DOMAINS }}
+          CONCURRENT_DOMAINS: ${{ vars.CONCURRENT_DOMAINS }}
+          BATCH_SIZE: ${{ vars.BATCH_SIZE }}
         run: node scraper/scraper.js
