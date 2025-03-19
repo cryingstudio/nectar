@@ -6,9 +6,6 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch: # Allows manual triggering for testing
 
-env:
-  WORKFLOW_VARIABLE: WORKFLOW
-
 jobs:
   scrape-coupons:
     runs-on: ubuntu-latest
@@ -32,5 +29,5 @@ jobs:
           SUPABASE_URL: ${{ env.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.SUPABASE_ANON_KEY }}
         run: node scraper/scraper.js
-          echo "This is the ${{ secrets.SUPABASE_URL }} environment variable"
-          echo "This is the ${{ secrets.SUPABASE_ANON_KEY }} environment variable"
+          echo "This is the ${{ env.SUPABASE_URL }} environment variable"
+          echo "This is the ${{ env.SUPABASE_ANON_KEY }} environment variable"
