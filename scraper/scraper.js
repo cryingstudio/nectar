@@ -197,80 +197,126 @@ async function scrapeCoupons(domain) {
 
     // Process coupons with modal URLs to get the actual codes
     const completeCoupons = [...basicCoupons];
-    const modalPages = [];
 
     try {
-      // Process modals sequentially and limit to 5 for reliability
-      const maxToProcess = Math.min(5, modalUrls.length);
+      // Process all coupons but in batches of 5
+      const batchSize = 5;
+      const totalCoupons = modalUrls.length;
+      const totalBatches = Math.ceil(totalCoupons / batchSize);
 
-      for (let i = 0; i < maxToProcess; i++) {
-        if (!modalUrls[i]) continue;
+      await log(
+        `Processing ${totalCoupons} coupons in ${totalBatches} batches of ${batchSize}`
+      );
 
-        await log(`Processing modal ${i + 1}/${maxToProcess}: ${modalUrls[i]}`);
-
+      // Pre-create a pool of pages to reuse for each batch
+      const pagePool = [];
+      for (let i = 0; i < batchSize; i++) {
         const modalPage = await browser.newPage();
         await modalPage.setUserAgent(
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
         );
         await modalPage.setJavaScriptEnabled(true);
-        modalPages.push(modalPage);
+        pagePool.push(modalPage);
+      }
 
-        try {
-          // Navigate to the modal URL
-          await modalPage.goto(modalUrls[i], {
-            waitUntil: "networkidle2",
-            timeout: 30000,
-          });
+      // Process in batches
+      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+        const startIndex = batchIndex * batchSize;
+        const endIndex = Math.min(startIndex + batchSize, totalCoupons);
+        const currentBatchSize = endIndex - startIndex;
 
-          // Take screenshot of modal for debugging
-          const modalScreenshotPath = path.join(
-            LOGS_DIR,
-            `${domain.replace(/\./g, "_")}_modal_${i}.png`
+        await log(
+          `Processing batch ${batchIndex + 1}/${totalBatches} (coupons ${
+            startIndex + 1
+          }-${endIndex})`
+        );
+
+        // Process this batch in parallel
+        const batchPromises = [];
+
+        for (let i = 0; i < currentBatchSize; i++) {
+          const couponIndex = startIndex + i;
+          const modalUrl = modalUrls[couponIndex];
+
+          if (!modalUrl) continue;
+
+          // Use the appropriate page from the pool
+          const modalPage = pagePool[i];
+
+          batchPromises.push(
+            (async () => {
+              try {
+                await log(
+                  `Processing modal ${
+                    couponIndex + 1
+                  }/${totalCoupons}: ${modalUrl}`
+                );
+
+                // Navigate to the modal URL
+                await modalPage.goto(modalUrl, {
+                  waitUntil: "networkidle2",
+                  timeout: 30000,
+                });
+
+                // Take screenshot of modal for debugging
+                const modalScreenshotPath = path.join(
+                  LOGS_DIR,
+                  `${domain.replace(/\./g, "_")}_modal_${couponIndex}.png`
+                );
+                await modalPage.screenshot({ path: modalScreenshotPath });
+
+                // Extract the code from the modal using the successful approach from test script
+                const code = await modalPage.evaluate(() => {
+                  // Try various selectors - only using the two that worked in test script
+                  const specificSelectors = [
+                    "input#code.input.code",
+                    "input.input.code",
+                  ];
+
+                  // Try the specific selectors first
+                  for (const selector of specificSelectors) {
+                    const element = document.querySelector(selector);
+                    if (!element) continue;
+
+                    const value = element.value.trim();
+                    if (value) return value;
+                  }
+
+                  return "AUTOMATIC"; // Default if no code found
+                });
+
+                // Update the coupon with the extracted code
+                if (code && code !== "AUTOMATIC") {
+                  completeCoupons[couponIndex].code = code;
+                  await log(`Found code ${code} for coupon ${couponIndex + 1}`);
+                } else {
+                  await log(
+                    `No code found for coupon ${couponIndex + 1}`,
+                    "WARN"
+                  );
+                }
+              } catch (error) {
+                logError(
+                  `Error processing modal for coupon ${couponIndex + 1}`,
+                  error
+                );
+              }
+            })()
           );
-          await modalPage.screenshot({ path: modalScreenshotPath });
-          await log(`Saved modal screenshot to ${modalScreenshotPath}`);
-
-          // Extract the code from the modal using the successful approach from test script
-          const code = await modalPage.evaluate(() => {
-            // Try various selectors - only using the two that worked in test script
-            const specificSelectors = [
-              "input#code.input.code",
-              "input.input.code",
-            ];
-
-            // Try the specific selectors first
-            for (const selector of specificSelectors) {
-              const element = document.querySelector(selector);
-              if (!element) continue;
-
-              const value = element.value.trim();
-              if (value) return value;
-            }
-
-            return "AUTOMATIC"; // Default if no code found
-          });
-
-          // Update the coupon with the extracted code
-          if (code && code !== "AUTOMATIC") {
-            completeCoupons[i].code = code;
-            await log(`Found code ${code} for coupon ${i + 1}`);
-          } else {
-            await log(`No code found for coupon ${i + 1}`, "WARN");
-          }
-        } catch (error) {
-          logError(`Error processing modal for coupon ${i + 1}`, error);
         }
 
-        // Add a small delay between modals
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Wait for all modals in this batch to complete
+        await Promise.all(batchPromises);
       }
-    } finally {
-      // Close all modal pages
-      for (const modalPage of modalPages) {
+
+      // Close all pages in the pool
+      for (const modalPage of pagePool) {
         await modalPage
           .close()
           .catch((err) => logError("Error closing modal page", err));
       }
+    } catch (error) {
+      logError(`Error in batch processing of modals`, error);
     }
 
     await log(
@@ -372,8 +418,6 @@ async function main() {
 
     // Add a delay between domains to avoid rate limiting
     await log(`Completed processing for domain: ${domain}`);
-    await log(`Waiting before processing next domain...`);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
   }
 
   await log(`----------------------------------------`);
