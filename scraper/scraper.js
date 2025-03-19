@@ -295,7 +295,9 @@ async function scrapeCoupons(domain) {
                 }
 
                 // Add a small delay to ensure dynamic content is loaded
-                await modalPage.waitForTimeout(1000);
+                await modalPage.evaluate(() => {
+                  return new Promise((resolve) => setTimeout(resolve, 1000));
+                });
 
                 // Extract the code from the modal using multiple approaches
                 const code = await modalPage.evaluate(() => {
