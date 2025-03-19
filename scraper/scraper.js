@@ -295,9 +295,6 @@ async function scrapeCoupons(domain) {
                   );
                 }
 
-                // Small delay to ensure any dynamic content is loaded
-                await modalPage.waitForTimeout(1000);
-
                 // Take screenshot of modal for debugging
                 const modalScreenshotPath = path.join(
                   LOGS_DIR,
