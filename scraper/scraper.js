@@ -182,7 +182,7 @@ async function scrapeCoupons(domain) {
 
     try {
       // Process all coupons but in batches of 5
-      const batchSize = 5;
+      const batchSize = 1;
       const totalCoupons = modalUrls.length;
       const totalBatches = Math.ceil(totalCoupons / batchSize);
 
