@@ -119,7 +119,7 @@ async function scrapeCoupons(domain) {
 
     await log(`Navigating to couponfollow.com for ${domain}...`);
     await page.goto(`https://couponfollow.com/site/${domain}`, {
-      waitUntil: "networkidle2",
+      waitUntil: ["load", "networkidle2", "domcontentloaded"],
       timeout: 120000, // 2 minutes
     });
 
@@ -194,7 +194,7 @@ async function scrapeCoupons(domain) {
         try {
           // Navigate to the modal URL
           await page.goto(modalUrl, {
-            waitUntil: "networkidle2",
+            waitUntil: ["load", "networkidle2", "domcontentloaded"],
             timeout: 30000,
           });
 
