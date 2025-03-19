@@ -172,7 +172,7 @@ async function scrapeCoupons(domain) {
         const modalUrl = element.getAttribute("data-modal");
 
         // Store element ID for debugging
-        const elementId = element.getAttribute("id");
+        const elementId = element.getAttribute("id") || `coupon-${idCounter}`;
 
         basicCoupons.push({
           id: idCounter++,
@@ -270,7 +270,7 @@ async function scrapeCoupons(domain) {
                   `Processing modal ${
                     couponIndex + 1
                   }/${totalCoupons}: ${modalUrl} (Element ID: ${
-                    coupon.elementId
+                    coupon.elementId || "unknown"
                   })`
                 );
 
@@ -294,13 +294,6 @@ async function scrapeCoupons(domain) {
                     "WARN"
                   );
                 }
-
-                // Take screenshot of modal for debugging
-                const modalScreenshotPath = path.join(
-                  LOGS_DIR,
-                  `${domain.replace(/\./g, "_")}_modal_${couponIndex}.png`
-                );
-                await modalPage.screenshot({ path: modalScreenshotPath });
 
                 // Extract the code from the modal using multiple approaches
                 const code = await modalPage.evaluate(() => {
@@ -350,13 +343,13 @@ async function scrapeCoupons(domain) {
                   completeCoupons[couponIndex].code = code;
                   await log(
                     `Found code ${code} for coupon ${couponIndex + 1} (ID: ${
-                      coupon.elementId
+                      coupon.elementId || "unknown"
                     })`
                   );
                 } else {
                   await log(
                     `No code found for coupon ${couponIndex + 1} (ID: ${
-                      coupon.elementId
+                      coupon.elementId || "unknown"
                     })`,
                     "WARN"
                   );
@@ -387,16 +380,6 @@ async function scrapeCoupons(domain) {
 
     await log(
       `Completed processing ${completeCoupons.length} coupons for ${domain}`
-    );
-
-    // Save complete results to a JSON file for debugging
-    const completeResultsPath = path.join(
-      process.cwd(),
-      `${domain.replace(/\./g, "_")}_complete.json`
-    );
-    await fs.writeFile(
-      completeResultsPath,
-      JSON.stringify(completeCoupons, null, 2)
     );
 
     return completeCoupons;
