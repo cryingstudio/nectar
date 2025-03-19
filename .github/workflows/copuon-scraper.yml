@@ -8,7 +8,7 @@ on:
 
 jobs:
   scrape-coupons:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60 # Increased timeout to allow for modal processing
 
     steps:
