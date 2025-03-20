@@ -153,6 +153,7 @@ async function scrapeDomains(letter) {
     });
 
     await log(`Found ${domains.length} domains for letter ${letter}`);
+    scrapeCoupons();
     return domains;
   } catch (error) {
     logError(`Error scraping domains for letter ${letter}`, error);
