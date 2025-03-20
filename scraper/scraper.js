@@ -14,6 +14,16 @@ const LOG_FILE = path.join(
   `scrape-${new Date().toISOString().replace(/:/g, "-")}.log`
 );
 
+module.exports = {
+  scrapeDomains,
+  scrapeCoupons,
+  saveToDatabase,
+  log,
+  logError,
+  CONFIG,
+  main,
+};
+
 // Setup logging to both console and file
 const log = async (message, level = "INFO") => {
   const timestamp = new Date().toISOString();
@@ -693,14 +703,6 @@ async function main() {
     process.exit(1);
   }
 }
-
-// Export functions for testing
-module.exports = {
-  scrapeDomains,
-  scrapeCoupons,
-  saveToDatabase,
-  main,
-};
 
 // Only run main if this script is called directly
 if (require.main === module) {
