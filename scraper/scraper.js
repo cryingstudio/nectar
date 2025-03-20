@@ -183,7 +183,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
 
   try {
     // Create a single browser context for better resource management
-    const context = await browser.createIncognitoBrowserContext();
+    const context = await browser.createBrowserContext();
 
     const page = await context.newPage();
     await page.setUserAgent(
