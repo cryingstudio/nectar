@@ -230,6 +230,8 @@ async function scrapeCoupons(domain, retryCount = 0) {
       timeout: CONFIG.navigationTimeout,
     });
 
+    await new Promise((r) => setTimeout(r, 500));
+
     // Immediately extract coupon data before all resources finish loading
     const { basicCoupons, modalUrls, directCodes } = await page.evaluate(() => {
       const basicCoupons = [];
