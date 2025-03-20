@@ -20,7 +20,8 @@ jobs:
           node-version: "18"
 
       - name: Install dependencies
-        run: npm ci
+        working-directory: ./scraper
+        run: npm install
 
       - name: Run partial scraper (H-N)
         run: node scraper/runner.js
