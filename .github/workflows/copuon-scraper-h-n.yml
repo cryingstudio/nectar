@@ -24,7 +24,7 @@ jobs:
         run: npm install
 
       - name: Run partial scraper (H-N)
-        run: node scraper/runner.js
+        run: node scraper/scraper.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
