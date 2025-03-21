@@ -1,21 +1,22 @@
-name: Coupon Scraper (A-G)
+name: Daily Coupon Scraper
 
 on:
   schedule:
-    - cron: "0 0 * * 1" # Monday at midnight
-  workflow_dispatch: # Manual trigger option
+    # Run at midnight UTC every day
+    - cron: "0 0 * * *"
+  workflow_dispatch: # Allows manual triggering for testing
 
 jobs:
-  scrape:
+  scrape-coupons:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 60 # Increased timeout to allow for modal processing
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
+      - name: Set up Node.js
+        uses: useblacksmith/setup-node@v5
         with:
           node-version: "18"
 
@@ -23,11 +24,9 @@ jobs:
         working-directory: ./scraper
         run: npm install
 
-      - name: Run partial scraper (A-G)
-        run: node scraper/scraper.js
+      - name: Run partial scraper (H-N)
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
           LETTERS: "a,b,c,d,e,f,g"
-          CONCURRENT_DOMAINS: 3 # Reduce if hitting rate limits
-          BATCH_SIZE: 3
+        run: node scraper/scraper.js
