@@ -55,7 +55,6 @@ async function runPartialScraper() {
               return { success: false, domain, couponCount: 0 };
             }
           } catch (error) {
-            logError(`Failed to process domain: ${domain}`, error);
             return { success: false, domain, couponCount: 0 };
           }
         })

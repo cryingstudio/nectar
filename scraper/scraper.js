@@ -4,43 +4,12 @@ const { createClient } = require("@supabase/supabase-js");
 const fs = require("fs").promises;
 const path = require("path");
 
-// Ensure logs directory exists
-const LOGS_DIR = path.join(process.cwd(), "logs");
-fs.mkdir(LOGS_DIR, { recursive: true }).catch(console.error);
-
-// Create log file with timestamp
-const LOG_FILE = path.join(
-  LOGS_DIR,
-  `scrape-${new Date().toISOString().replace(/:/g, "-")}.log`
-);
-
 module.exports = {
   scrapeDomains,
   scrapeCoupons,
   saveToDatabase,
-  log,
-  logError,
   CONFIG,
   main,
-};
-
-// Setup logging to both console and file
-const log = async (message, level = "INFO") => {
-  const timestamp = new Date().toISOString();
-  const formattedMessage = `[${timestamp}] [${level}] ${message}`;
-
-  console.log(formattedMessage);
-
-  // Also write to log file
-  await fs.appendFile(LOG_FILE, formattedMessage + "\n").catch(console.error);
-};
-
-// Error logger
-const logError = (message, error) => {
-  log(`${message}: ${error.message}`, "ERROR");
-  if (error.stack) {
-    log(error.stack, "ERROR");
-  }
 };
 
 // Initialize Supabase client
@@ -48,10 +17,6 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-  log(
-    "Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_ANON_KEY environment variables.",
-    "ERROR"
-  );
   process.exit(1);
 }
 
@@ -83,8 +48,6 @@ const CONFIG = {
  * @returns {Promise<string[]>} - Array of domain names
  */
 async function scrapeDomains(letter) {
-  await log(`Scraping domain list for letter: ${letter}...`);
-
   const browser = await puppeteer.launch({
     headless: "new",
     args: [
@@ -132,14 +95,11 @@ async function scrapeDomains(letter) {
 
     // Navigate to the letter's category page
     const url = `https://couponfollow.com/site/browse/${letter}/all`;
-    await log(`Navigating to ${url}...`);
 
     await page.goto(url, {
       waitUntil: "networkidle2",
       timeout: CONFIG.navigationTimeout,
     });
-
-    await log(`Page loaded for letter ${letter}, extracting domains...`);
 
     // Extract domain names from the page
     const domains = await page.evaluate(() => {
@@ -162,11 +122,9 @@ async function scrapeDomains(letter) {
       return domainList;
     });
 
-    await log(`Found ${domains.length} domains for letter ${letter}`);
     scrapeCoupons();
     return domains;
   } catch (error) {
-    logError(`Error scraping domains for letter ${letter}`, error);
     return [];
   } finally {
     await browser.close();
@@ -174,8 +132,6 @@ async function scrapeDomains(letter) {
 }
 
 async function scrapeCoupons(domain, retryCount = 0) {
-  await log(`Scraping coupons for ${domain}...`);
-
   const browser = await puppeteer.launch({
     headless: "new",
     args: [
@@ -234,8 +190,6 @@ async function scrapeCoupons(domain, retryCount = 0) {
     // Set shorter timeout
     page.setDefaultNavigationTimeout(CONFIG.navigationTimeout);
 
-    // Optimize page loading strategy
-    await log(`Navigating to couponfollow.com for ${domain}...`);
     await page.goto(`https://couponfollow.com/site/${domain}`, {
       waitUntil: "domcontentloaded", // Faster than networkidle2
       timeout: CONFIG.navigationTimeout,
@@ -254,7 +208,6 @@ async function scrapeCoupons(domain, retryCount = 0) {
       const couponElements = document.querySelectorAll(
         '.offer-card.regular-offer[data-type="coupon"]'
       );
-      console.log(`Found ${couponElements.length} offer cards`);
 
       couponElements.forEach((element) => {
         const discount =
@@ -329,10 +282,6 @@ async function scrapeCoupons(domain, retryCount = 0) {
       };
     });
 
-    await log(
-      `Found ${basicCoupons.length} basic coupons for ${domain}, need to process ${modalUrls.length} modals`
-    );
-
     // Convert directCodes array back to Map
     const directCodesMap = new Map(directCodes);
 
@@ -351,10 +300,6 @@ async function scrapeCoupons(domain, retryCount = 0) {
         const batchSize = Math.min(CONFIG.batchSize * 2, 10); // Double but cap at 10
         const totalModals = modalUrlsToProcess.length;
         const totalBatches = Math.ceil(totalModals / batchSize);
-
-        await log(
-          `Processing ${totalModals} modals in ${totalBatches} batches of up to ${batchSize}`
-        );
 
         // Pre-create a pool of pages for reuse
         const pagePool = [];
@@ -394,12 +339,6 @@ async function scrapeCoupons(domain, retryCount = 0) {
           const startIndex = batchIndex * batchSize;
           const endIndex = Math.min(startIndex + batchSize, totalModals);
           const currentBatchSize = endIndex - startIndex;
-
-          await log(
-            `Processing batch ${batchIndex + 1}/${totalBatches} (modals ${
-              startIndex + 1
-            }-${endIndex})`
-          );
 
           // Process this batch in parallel
           const batchPromises = [];
@@ -492,24 +431,12 @@ async function scrapeCoupons(domain, retryCount = 0) {
         for (const modalPage of pagePool) {
           await modalPage.close().catch(() => {});
         }
-      } catch (error) {
-        logError(`Error in batch processing of modals`, error);
-      }
+      } catch (error) {}
     }
 
-    await log(
-      `Completed processing ${completeCoupons.length} coupons for ${domain}`
-    );
     return completeCoupons;
   } catch (error) {
-    logError(`Error scraping ${domain}`, error);
     if (retryCount < CONFIG.domainRetries) {
-      await log(
-        `Retrying ${domain} (attempt ${retryCount + 1}/${
-          CONFIG.domainRetries
-        })...`,
-        "WARN"
-      );
       await new Promise((r) => setTimeout(r, 2000));
       return scrapeCoupons(domain, retryCount + 1);
     }
@@ -539,38 +466,21 @@ async function saveToDatabase(domain, coupons) {
   const uniqueCoupons = Array.from(uniqueMap.values());
 
   if (uniqueCoupons.length === 0) {
-    await log(`No coupons to save for ${domain}`, "WARN");
     return;
   }
 
   // Save to Supabase
   try {
-    await log(
-      `Saving ${uniqueCoupons.length} coupons for ${domain} to database...`
-    );
-
     const { data, error } = await supabase
       .from("coupons")
       .upsert(uniqueCoupons, {
         onConflict: ["domain", "code"],
         ignoreDuplicates: true,
       });
-
-    if (error) {
-      logError(`Error saving coupons for ${domain} to database`, error);
-    } else {
-      await log(
-        `Successfully saved ${uniqueCoupons.length} coupons for ${domain} to database`
-      );
-    }
-  } catch (error) {
-    logError(`Exception saving coupons for ${domain} to database`, error);
-  }
+  } catch (error) {}
 }
 
 async function main() {
-  await log("Starting coupon scraper...");
-
   // Define all alphabet letters including special characters
   const letters = [
     "a",
@@ -607,20 +517,12 @@ async function main() {
 
   // Process each letter
   for (const letter of letters) {
-    await log(`-------------------------------------------`);
-    await log(`Starting to process domains for letter: ${letter}`);
-
     // Get all domains for this letter
     const domains = await scrapeDomains(letter);
 
     if (domains.length === 0) {
-      await log(`No domains found for letter ${letter}, skipping...`, "WARN");
       continue;
     }
-
-    await log(
-      `Found ${domains.length} domains for letter ${letter}, starting to scrape coupons...`
-    );
 
     let letterSuccessCount = 0;
     let letterErrorCount = 0;
@@ -628,31 +530,19 @@ async function main() {
     // Process domains in batches for concurrency
     for (let i = 0; i < domains.length; i += CONFIG.concurrentDomains) {
       const batch = domains.slice(i, i + CONFIG.concurrentDomains);
-      await log(
-        `Processing batch of ${batch.length} domains (${i + 1}-${Math.min(
-          i + CONFIG.concurrentDomains,
-          domains.length
-        )} of ${domains.length})...`
-      );
 
       const results = await Promise.all(
         batch.map(async (domain) => {
           try {
-            await log(`Starting processing for domain: ${domain}`);
-
             const coupons = await scrapeCoupons(domain);
 
             if (coupons.length > 0) {
               await saveToDatabase(domain, coupons);
-              await log(`Completed processing for domain: ${domain}`);
               return { success: true, domain };
             } else {
-              await log(`No coupons found for ${domain}`, "WARN");
-              await log(`Completed processing for domain: ${domain}`);
               return { success: false, domain };
             }
           } catch (error) {
-            logError(`Failed to process domain: ${domain}`, error);
             return { success: false, domain };
           }
         })
@@ -671,35 +561,21 @@ async function main() {
 
       // Add a delay between batches to avoid overloading resources
       if (i + CONFIG.concurrentDomains < domains.length) {
-        await log(
-          `Waiting ${CONFIG.delayBetweenDomains}ms before next batch...`
-        );
         await new Promise((resolve) =>
           setTimeout(resolve, CONFIG.delayBetweenDomains)
         );
       }
     }
 
-    await log(
-      `Letter ${letter} completed: ${letterSuccessCount} successes, ${letterErrorCount} failures`
-    );
-
     // Add a longer delay between letters to avoid being detected as a bot
     if (letters.indexOf(letter) < letters.length - 1) {
-      const delayBetweenLetters = CONFIG.delayBetweenDomains * 2; // Twice the domain delay
-      await log(`Waiting ${delayBetweenLetters}ms before next letter...`);
+      const delayBetweenLetters = CONFIG.delayBetweenDomains;
       await new Promise((resolve) => setTimeout(resolve, delayBetweenLetters));
     }
   }
 
-  await log(`----------------------------------------`);
-  await log(`Full alphabet coupon scraping completed!`);
-  await log(`Successfully processed: ${totalSuccessCount} domains`);
-  await log(`Failed to process: ${totalErrorCount} domains`);
-
   // Exit with error code if all domains failed
   if (totalSuccessCount === 0) {
-    await log("All domains failed to process", "ERROR");
     process.exit(1);
   }
 }
@@ -707,7 +583,6 @@ async function main() {
 // Only run main if this script is called directly
 if (require.main === module) {
   main().catch((error) => {
-    logError("Fatal error in main", error);
     process.exit(1);
   });
 }
