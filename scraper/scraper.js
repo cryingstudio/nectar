@@ -1,16 +1,6 @@
 // scraper/scraper.js
 const puppeteer = require("puppeteer");
 const { createClient } = require("@supabase/supabase-js");
-const fs = require("fs").promises;
-const path = require("path");
-
-module.exports = {
-  scrapeDomains,
-  scrapeCoupons,
-  saveToDatabase,
-  CONFIG,
-  main,
-};
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -481,7 +471,6 @@ async function saveToDatabase(domain, coupons) {
 }
 
 async function main() {
-  // Define all alphabet letters including special characters
   const letters = process.env.LETTERS
     ? process.env.LETTERS.split(",")
     : process.argv.length > 2
