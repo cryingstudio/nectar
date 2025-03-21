@@ -544,9 +544,4 @@ async function main() {
   }
 }
 
-// Only run main if this script is called directly
-if (require.main === module) {
-  main().catch((error) => {
-    process.exit(1);
-  });
-}
+main();
