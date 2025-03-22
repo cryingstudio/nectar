@@ -112,7 +112,7 @@ async function scrapeDomains(letter) {
       const domainList = [];
 
       // Each store is in a list item with a link
-      const storeLinks = document.querySelectorAll('ul li a[href^="/site/"]');
+      const storeLinks = document.querySelectorAll("a.store-link");
       console.log(`Found ${storeLinks.length} store links on page`);
 
       storeLinks.forEach((link) => {
