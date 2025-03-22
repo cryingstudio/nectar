@@ -273,24 +273,6 @@ async function scrapeCoupons(domain, retryCount = 0) {
           }
         }
 
-        // Try to find code in any hidden input or span
-        if (!hasDirectCode) {
-          const codeElements = element.querySelectorAll(
-            'input[type="hidden"], .code-text, [data-clipboard-text]'
-          );
-          for (const el of codeElements) {
-            const possibleCode =
-              el.value ||
-              el.getAttribute("data-clipboard-text") ||
-              el.textContent;
-            if (possibleCode && possibleCode.trim() !== "") {
-              code = possibleCode.trim();
-              hasDirectCode = true;
-              break;
-            }
-          }
-        }
-
         // Get modal URL only if we don't have direct code
         const modalUrl = element.getAttribute("data-modal");
         const elementId = element.getAttribute("id") || `coupon-${idCounter}`;
@@ -345,7 +327,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
     if (modalUrlsToProcess.length > 0) {
       try {
         // Increase batch size for better throughput
-        const batchSize = Math.min(CONFIG.batchSize * 2, 10); // Double but cap at 10
+        const batchSize = CONFIG.batchSize;
         const totalModals = modalUrlsToProcess.length;
         const totalBatches = Math.ceil(totalModals / batchSize);
 
@@ -437,14 +419,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
                   // This reduces waiting time significantly
                   const code = await modalPage.evaluate(() => {
                     // Try all selectors at once
-                    const selectors = [
-                      "input#code.input.code",
-                      "input.input.code",
-                      ".coupon-code",
-                      ".code-text",
-                      "[data-clipboard-text]",
-                      "[data-code]",
-                    ];
+                    const selectors = ["input#code.input.code"];
 
                     // Try to find the code using any selector
                     for (const selector of selectors) {
