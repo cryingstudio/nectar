@@ -323,7 +323,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
     if (modalUrlsToProcess.length > 0) {
       try {
         // Increase batch size for better throughput
-        const batchSize = Math.min(CONFIG.batchSize);
+        const batchSize = Math.min(modalUrlsToProcess.length);
         const totalModals = modalUrlsToProcess.length;
         const totalBatches = Math.ceil(totalModals / batchSize);
 
