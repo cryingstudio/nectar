@@ -72,7 +72,7 @@ async function scrapeDomains(letter) {
 
     // Navigate to the letter page
     const letterParam = letter === "#" ? "num" : letter.toLowerCase();
-    await page.goto(`https://couponfollow.com/browse/${letterParam}/all`, {
+    await page.goto(`https://couponfollow.com/site/browse/${letterParam}/all`, {
       waitUntil: "networkidle2",
       timeout: 30000,
     });
