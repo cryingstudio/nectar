@@ -56,12 +56,6 @@ const CONFIG = {
   domainRetries: process.env.DOMAIN_RETRIES
     ? parseInt(process.env.DOMAIN_RETRIES)
     : 2,
-  modalTimeout: process.env.MODAL_TIMEOUT
-    ? parseInt(process.env.MODAL_TIMEOUT)
-    : 15000,
-  navigationTimeout: process.env.NAVIGATION_TIMEOUT
-    ? parseInt(process.env.NAVIGATION_TIMEOUT)
-    : 30000,
   delayBetweenDomains: process.env.DELAY_BETWEEN_DOMAINS
     ? parseInt(process.env.DELAY_BETWEEN_DOMAINS)
     : 1000,
@@ -118,15 +112,12 @@ async function scrapeDomains(letter) {
       };
     });
 
-    page.setDefaultNavigationTimeout(CONFIG.navigationTimeout);
-
     // Navigate to the letter's category page
     const url = `https://couponfollow.com/site/browse/${letter}/all`;
     await log(`Navigating to ${url}...`);
 
     await page.goto(url, {
       waitUntil: "networkidle2",
-      timeout: CONFIG.navigationTimeout,
     });
 
     await log(`Page loaded for letter ${letter}, extracting domains...`);
@@ -220,14 +211,10 @@ async function scrapeCoupons(domain, retryCount = 0) {
       }
     });
 
-    // Set shorter timeout
-    page.setDefaultNavigationTimeout(CONFIG.navigationTimeout);
-
     // Optimize page loading strategy
     await log(`Navigating to couponfollow.com for ${domain}...`);
     await page.goto(`https://couponfollow.com/site/${domain}`, {
       waitUntil: "networkidle2",
-      timeout: CONFIG.navigationTimeout,
     });
 
     await new Promise((r) => setTimeout(r, 500));
@@ -405,13 +392,9 @@ async function scrapeCoupons(domain, retryCount = 0) {
             batchPromises.push(
               (async () => {
                 try {
-                  // Faster timeout for modals
-                  const shorterTimeout = Math.min(CONFIG.modalTimeout, 8000);
-
                   // Use a faster navigation strategy
                   await modalPage.goto(modalUrl, {
                     waitUntil: "networkidle2",
-                    timeout: shorterTimeout,
                   });
 
                   // Define selectors to look for
@@ -419,15 +402,11 @@ async function scrapeCoupons(domain, retryCount = 0) {
 
                   // Wait for at least one of the selectors to be present
                   try {
-                    await modalPage.waitForFunction(
-                      (selectors) => {
-                        return selectors.some((selector) =>
-                          document.querySelector(selector)
-                        );
-                      },
-                      { timeout: 8000 },
-                      possibleSelectors
-                    );
+                    await modalPage.waitForFunction((selectors) => {
+                      return selectors.some((selector) =>
+                        document.querySelector(selector)
+                      );
+                    }, possibleSelectors);
 
                     // Additional delay to ensure content is fully loaded
                     await new Promise((r) => setTimeout(r, 500));
