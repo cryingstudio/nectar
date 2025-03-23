@@ -536,6 +536,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
 async function saveToDatabase(domain, coupons) {
   // Prepare data for database
   const uniqueMap = new Map();
+  let validCouponCount = 0;
 
   // First, sort coupons by verified status (true first) and then by date added
   const sortedCoupons = [...coupons].sort((a, b) => {
@@ -545,13 +546,15 @@ async function saveToDatabase(domain, coupons) {
     return 0;
   });
 
-  // Process coupons, keeping only the first occurrence of each unique code
+  // Process coupons, keeping track of which ones are valid
   sortedCoupons.forEach((coupon) => {
-    // Only save coupons that have actual codes
-    if (coupon.code === "AUTOMATIC") return;
+    // Skip coupons without actual codes
+    if (!coupon.code || coupon.code === "AUTOMATIC") return;
 
-    // Use just domain and code as the unique key
+    // Create a unique key that includes all relevant information
     const key = `${domain}:${coupon.code}`;
+
+    // Only add if we don't already have this code for this domain
     if (!uniqueMap.has(key)) {
       uniqueMap.set(key, {
         domain,
@@ -559,7 +562,9 @@ async function saveToDatabase(domain, coupons) {
         discount: coupon.discount,
         terms: coupon.terms,
         verified: coupon.verified,
+        source: coupon.source || "CouponFollow",
       });
+      validCouponCount++;
     }
   });
 
@@ -570,9 +575,11 @@ async function saveToDatabase(domain, coupons) {
     return;
   }
 
-  // Log the coupons being saved
+  // Log the exact coupons being saved
   await log(
-    `Preparing to save the following coupons for ${domain}:\n${uniqueCoupons
+    `Preparing to save ${
+      uniqueCoupons.length
+    } coupons for ${domain}:\n${uniqueCoupons
       .map(
         (c) =>
           `  - ${c.code} (${c.verified ? "verified" : "unverified"}): ${
@@ -582,54 +589,50 @@ async function saveToDatabase(domain, coupons) {
       .join("\n")}`
   );
 
-  // Save to Supabase in smaller batches to avoid conflicts
-  try {
-    const batchSize = 5;
-    const totalBatches = Math.ceil(uniqueCoupons.length / batchSize);
-    let successfulSaves = 0;
+  // Save in batches of 10 coupons
+  const batchSize = 10;
+  const totalBatches = Math.ceil(uniqueCoupons.length / batchSize);
+  let successfulSaves = 0;
 
-    for (let i = 0; i < uniqueCoupons.length; i += batchSize) {
-      const batch = uniqueCoupons.slice(i, i + batchSize);
-      const batchNumber = Math.floor(i / batchSize) + 1;
-
-      await log(
-        `Saving batch ${batchNumber}/${totalBatches} (${batch.length} coupons) for ${domain}...`
-      );
-
-      try {
-        const { error } = await supabase.from("coupons").upsert(batch, {
-          onConflict: ["domain", "code"],
-          ignoreDuplicates: true,
-        });
-
-        if (error) {
-          logError(
-            `Error saving batch ${batchNumber} for ${domain} to database`,
-            error
-          );
-        } else {
-          successfulSaves += batch.length;
-          await log(`Successfully saved batch ${batchNumber} for ${domain}`);
-        }
-      } catch (batchError) {
-        logError(
-          `Exception saving batch ${batchNumber} for ${domain}`,
-          batchError
-        );
-      }
-
-      // Add a small delay between batches
-      if (i + batchSize < uniqueCoupons.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    }
+  for (let i = 0; i < uniqueCoupons.length; i += batchSize) {
+    const batch = uniqueCoupons.slice(i, i + batchSize);
+    const batchNumber = Math.floor(i / batchSize) + 1;
 
     await log(
-      `Completed saving ${successfulSaves} out of ${uniqueCoupons.length} coupons for ${domain} to database`
+      `Saving batch ${batchNumber}/${totalBatches} (${batch.length} coupons) for ${domain}...`
     );
-  } catch (error) {
-    logError(`Exception saving coupons for ${domain} to database`, error);
+
+    try {
+      const { error } = await supabase.from("coupons").upsert(batch, {
+        onConflict: ["domain", "code"],
+        ignoreDuplicates: false, // Changed to false to allow updates
+      });
+
+      if (error) {
+        logError(
+          `Error saving batch ${batchNumber} for ${domain} to database`,
+          error
+        );
+      } else {
+        successfulSaves += batch.length;
+        await log(`Successfully saved batch ${batchNumber} for ${domain}`);
+      }
+    } catch (batchError) {
+      logError(
+        `Exception saving batch ${batchNumber} for ${domain}`,
+        batchError
+      );
+    }
+
+    // Small delay between batches
+    if (i + batchSize < uniqueCoupons.length) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
+
+  await log(
+    `Completed saving ${successfulSaves} out of ${uniqueCoupons.length} coupons for ${domain} to database`
+  );
 }
 
 async function main() {
