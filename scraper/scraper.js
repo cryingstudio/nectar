@@ -484,14 +484,6 @@ async function main() {
   }
 }
 
-// Export functions for testing
-module.exports = {
-  scrapeDomains,
-  scrapeCoupons,
-  saveToDatabase,
-  main,
-};
-
 // Only run main if this script is called directly
 if (require.main === module) {
   main().catch((error) => {
