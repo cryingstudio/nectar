@@ -239,7 +239,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
         });
 
         // Wait a moment for any JavaScript to run
-        await modalPage.waitForTimeout(1000);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
 
         // Extract the code - focusing specifically on the input#code.input.code selector
         const code = await modalPage.evaluate(() => {
