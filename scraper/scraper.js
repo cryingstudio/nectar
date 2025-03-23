@@ -473,66 +473,52 @@ async function scrapeCoupons(domain, retryCount = 0) {
 }
 
 async function saveToDatabase(domain, coupons) {
+  // Filter out only coupons with actual codes
+  const validCoupons = coupons.filter((coupon) => coupon.code !== "AUTOMATIC");
+
+  if (validCoupons.length === 0) {
+    await log(`No valid coupons to save for ${domain}`, "WARN");
+    return;
+  }
+
+  // Prepare data for database
+  const couponsToSave = validCoupons.map((coupon) => ({
+    domain,
+    code: coupon.code,
+    discount: coupon.discount,
+    terms: coupon.terms,
+    verified: coupon.verified,
+  }));
+
+  // Log all collected coupon codes
+  await log(
+    `Collected ${
+      couponsToSave.length
+    } coupon codes for ${domain}:\n${couponsToSave
+      .map(
+        (c) =>
+          `  - ${c.code} (${c.verified ? "verified" : "unverified"}): ${
+            c.discount
+          }`
+      )
+      .join("\n")}`
+  );
+
+  // Save all collected coupons to database
   try {
-    // Filter out AUTOMATIC codes and prepare coupons for database
-    const validCoupons = coupons
-      .filter((coupon) => coupon.code && coupon.code !== "AUTOMATIC")
-      .map((coupon) => ({
-        domain,
-        code: coupon.code,
-        discount: coupon.discount,
-        terms: coupon.terms,
-        verified: coupon.verified,
-      }));
-
-    if (validCoupons.length === 0) {
-      await log(`No valid coupons to save for ${domain}`, "WARN");
-      return;
-    }
-
-    // Log all collected coupon codes before saving
     await log(
-      `Collected ${
-        validCoupons.length
-      } coupon codes for ${domain}:\n${validCoupons
-        .map(
-          (c) =>
-            `  - ${c.code} (${c.verified ? "verified" : "unverified"}): ${
-              c.discount
-            }`
-        )
-        .join("\n")}`
+      `Saving ${couponsToSave.length} coupons for ${domain} to database...`
     );
 
-    // Save all coupons to database in a single batch
-    await log(
-      `Saving ${validCoupons.length} coupons to database for ${domain}...`
-    );
-
-    // Insert all coupons in a single batch
-    const { error } = await supabase.from("coupons").upsert(validCoupons, {
-      onConflict: ["domain", "code"],
-      ignoreDuplicates: false, // Changed to false to ensure updates happen
-    });
+    // You may need to modify your database schema or constraints
+    // to allow duplicate codes for the same domain
+    const { error } = await supabase.from("coupons").insert(couponsToSave);
 
     if (error) {
-      logError(`Database error while saving coupons for ${domain}`, error);
-      return;
-    }
-
-    await log(
-      `Successfully saved ${validCoupons.length} coupons to database for ${domain}`
-    );
-
-    // Double check what was saved
-    const { data: savedCoupons, error: checkError } = await supabase
-      .from("coupons")
-      .select("code, verified, discount")
-      .eq("domain", domain);
-
-    if (!checkError && savedCoupons) {
+      logError(`Error saving coupons for ${domain} to database`, error);
+    } else {
       await log(
-        `Verification: Found ${savedCoupons.length} coupons in database for ${domain}`
+        `Successfully saved ${couponsToSave.length} coupons for ${domain} to database`
       );
     }
   } catch (error) {
