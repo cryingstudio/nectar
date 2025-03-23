@@ -537,11 +537,21 @@ async function saveToDatabase(domain, coupons) {
   // Prepare data for database
   const uniqueMap = new Map();
 
-  coupons.forEach((coupon) => {
+  // First, sort coupons by verified status (true first) and then by date added
+  const sortedCoupons = [...coupons].sort((a, b) => {
+    if (a.verified !== b.verified) {
+      return b.verified ? 1 : -1; // Verified coupons first
+    }
+    return 0;
+  });
+
+  // Process coupons, keeping only the first occurrence of each unique code
+  sortedCoupons.forEach((coupon) => {
     // Only save coupons that have actual codes
     if (coupon.code === "AUTOMATIC") return;
 
-    const key = `${domain}:${coupon.code}:${coupon.discount}`; // Include discount in uniqueness check
+    // Use just domain and code as the unique key
+    const key = `${domain}:${coupon.code}`;
     if (!uniqueMap.has(key)) {
       uniqueMap.set(key, {
         domain,
@@ -563,30 +573,44 @@ async function saveToDatabase(domain, coupons) {
   // Log the coupons being saved
   await log(
     `Preparing to save the following coupons for ${domain}:\n${uniqueCoupons
-      .map((c) => `  - ${c.code}: ${c.discount}`)
+      .map(
+        (c) =>
+          `  - ${c.code} (${c.verified ? "verified" : "unverified"}): ${
+            c.discount
+          }`
+      )
       .join("\n")}`
   );
 
-  // Save to Supabase
+  // Save to Supabase in smaller batches to avoid conflicts
   try {
-    await log(
-      `Saving ${uniqueCoupons.length} coupons for ${domain} to database...`
-    );
+    const batchSize = 5;
+    for (let i = 0; i < uniqueCoupons.length; i += batchSize) {
+      const batch = uniqueCoupons.slice(i, i + batchSize);
+      await log(
+        `Saving batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(
+          uniqueCoupons.length / batchSize
+        )} (${batch.length} coupons) for ${domain}...`
+      );
 
-    const { data, error } = await supabase
-      .from("coupons")
-      .upsert(uniqueCoupons, {
+      const { error } = await supabase.from("coupons").upsert(batch, {
         onConflict: ["domain", "code"],
-        ignoreDuplicates: false, // Allow updates if the discount/terms changed
+        ignoreDuplicates: true,
       });
 
-    if (error) {
-      logError(`Error saving coupons for ${domain} to database`, error);
-    } else {
-      await log(
-        `Successfully saved ${uniqueCoupons.length} coupons for ${domain} to database`
-      );
+      if (error) {
+        logError(
+          `Error saving batch ${
+            Math.floor(i / batchSize) + 1
+          } for ${domain} to database`,
+          error
+        );
+      }
     }
+
+    await log(
+      `Successfully completed saving all ${uniqueCoupons.length} coupons for ${domain} to database`
+    );
   } catch (error) {
     logError(`Exception saving coupons for ${domain} to database`, error);
   }
