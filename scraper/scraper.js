@@ -22,7 +22,7 @@ const CONFIG = {
     : 3,
   delayBetweenDomains: process.env.DELAY_BETWEEN_DOMAINS
     ? parseInt(process.env.DELAY_BETWEEN_DOMAINS)
-    : 2000,
+    : 200,
   domainRetries: process.env.DOMAIN_RETRIES
     ? parseInt(process.env.DOMAIN_RETRIES)
     : 2,
