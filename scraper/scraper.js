@@ -585,31 +585,47 @@ async function saveToDatabase(domain, coupons) {
   // Save to Supabase in smaller batches to avoid conflicts
   try {
     const batchSize = 5;
+    const totalBatches = Math.ceil(uniqueCoupons.length / batchSize);
+    let successfulSaves = 0;
+
     for (let i = 0; i < uniqueCoupons.length; i += batchSize) {
       const batch = uniqueCoupons.slice(i, i + batchSize);
+      const batchNumber = Math.floor(i / batchSize) + 1;
+
       await log(
-        `Saving batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(
-          uniqueCoupons.length / batchSize
-        )} (${batch.length} coupons) for ${domain}...`
+        `Saving batch ${batchNumber}/${totalBatches} (${batch.length} coupons) for ${domain}...`
       );
 
-      const { error } = await supabase.from("coupons").upsert(batch, {
-        onConflict: ["domain", "code"],
-        ignoreDuplicates: true,
-      });
+      try {
+        const { error } = await supabase.from("coupons").upsert(batch, {
+          onConflict: ["domain", "code"],
+          ignoreDuplicates: true,
+        });
 
-      if (error) {
+        if (error) {
+          logError(
+            `Error saving batch ${batchNumber} for ${domain} to database`,
+            error
+          );
+        } else {
+          successfulSaves += batch.length;
+          await log(`Successfully saved batch ${batchNumber} for ${domain}`);
+        }
+      } catch (batchError) {
         logError(
-          `Error saving batch ${
-            Math.floor(i / batchSize) + 1
-          } for ${domain} to database`,
-          error
+          `Exception saving batch ${batchNumber} for ${domain}`,
+          batchError
         );
+      }
+
+      // Add a small delay between batches
+      if (i + batchSize < uniqueCoupons.length) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
 
     await log(
-      `Successfully completed saving all ${uniqueCoupons.length} coupons for ${domain} to database`
+      `Completed saving ${successfulSaves} out of ${uniqueCoupons.length} coupons for ${domain} to database`
     );
   } catch (error) {
     logError(`Exception saving coupons for ${domain} to database`, error);
