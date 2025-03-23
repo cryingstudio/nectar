@@ -66,93 +66,6 @@ const CONFIG = {
  * @param {string} letter - The letter category (a-z or #) to scrape
  * @returns {Promise<string[]>} - Array of domain names
  */
-async function scrapeDomains(letter) {
-  await log(`Scraping domain list for letter: ${letter}...`);
-
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-accelerated-2d-canvas",
-      "--no-first-run",
-      "--no-zygote",
-      "--disable-gpu",
-      "--window-size=1920,1080",
-      "--disable-blink-features=AutomationControlled",
-    ],
-    defaultViewport: null,
-  });
-
-  try {
-    const page = await browser.newPage();
-
-    // Set a realistic user agent
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
-    );
-
-    // Set page options similar to coupon scraper
-    await page.setJavaScriptEnabled(true);
-    await page.setExtraHTTPHeaders({
-      "Accept-Language": "en-US,en;q=0.9",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    });
-
-    // Override webdriver properties to avoid detection
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", {
-        get: () => false,
-      });
-      window.navigator.chrome = { runtime: {} };
-      window.navigator.permissions = {
-        query: () => Promise.resolve({ state: "granted" }),
-      };
-    });
-
-    // Navigate to the letter's category page
-    const url = `https://couponfollow.com/site/browse/${letter}/all`;
-    await log(`Navigating to ${url}...`);
-
-    await page.goto(url, {
-      waitUntil: "networkidle2",
-    });
-
-    await log(`Page loaded for letter ${letter}, extracting domains...`);
-
-    // Extract domain names from the page
-    const domains = await page.evaluate(() => {
-      const domainList = [];
-
-      // Each store is in a list item with a link
-      const storeLinks = document.querySelectorAll('ul li a[href^="/site/"]');
-
-      storeLinks.forEach((link) => {
-        const href = link.getAttribute("href");
-        if (href) {
-          // Extract domain from the URL format "/site/domain.com"
-          const domain = href.replace("/site/", "");
-          if (domain) {
-            domainList.push(domain);
-          }
-        }
-      });
-
-      return domainList;
-    });
-
-    await log(`Found ${domains.length} domains for letter ${letter}`);
-    return domains;
-  } catch (error) {
-    logError(`Error scraping domains for letter ${letter}`, error);
-    return [];
-  } finally {
-    await browser.close();
-  }
-}
-
 async function scrapeCoupons(domain, retryCount = 0) {
   await log(`Scraping coupons for ${domain}...`);
 
@@ -167,34 +80,16 @@ async function scrapeCoupons(domain, retryCount = 0) {
       "--no-zygote",
       "--disable-gpu",
       "--window-size=1920,1080",
-      "--disable-blink-features=AutomationControlled",
     ],
-    defaultViewport: { width: 1280, height: 800 }, // Smaller viewport for speed
   });
 
   try {
-    // Create a single browser context for better resource management
     const context = await browser.createBrowserContext();
-
     const page = await context.newPage();
+
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
     );
-    await page.setJavaScriptEnabled(true);
-    await page.setExtraHTTPHeaders({
-      "Accept-Language": "en-US,en;q=0.9",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    });
-
-    // Anti-detection
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => false });
-      window.navigator.chrome = { runtime: {} };
-      window.navigator.permissions = {
-        query: () => Promise.resolve({ state: "granted" }),
-      };
-    });
 
     // Improve performance by blocking unnecessary resources
     await page.setRequestInterception(true);
@@ -211,132 +106,97 @@ async function scrapeCoupons(domain, retryCount = 0) {
       }
     });
 
-    // Optimize page loading strategy
     await log(`Navigating to couponfollow.com for ${domain}...`);
     await page.goto(`https://couponfollow.com/site/${domain}`, {
       waitUntil: "networkidle2",
+      timeout: 60000,
     });
 
-    await new Promise((r) => setTimeout(r, 500));
+    // Collect all coupon data including show-code buttons
+    const coupons = await page.evaluate(() => {
+      const results = [];
 
-    // Immediately extract coupon data before all resources finish loading
-    const { basicCoupons, modalUrls, directCodes, couponToModalMap } =
-      await page.evaluate(() => {
-        const basicCoupons = [];
-        const modalUrls = [];
-        const directCodes = new Map(); // Store any directly available codes
-        const couponToModalMap = new Map(); // Map coupon IDs to modal URLs
-        let idCounter = 1;
+      const couponCards = document.querySelectorAll(
+        '.offer-card.regular-offer[data-type="coupon"]'
+      );
 
-        // Use faster selectors
-        const couponElements = document.querySelectorAll(
-          '.offer-card.regular-offer[data-type="coupon"]'
-        );
-        console.log(`Found ${couponElements.length} offer cards`);
+      couponCards.forEach((card, index) => {
+        // Extract basic information
+        const discount =
+          card.querySelector(".offer-title")?.textContent?.trim() || "";
+        const terms =
+          card.querySelector(".offer-description")?.textContent?.trim() || "";
+        const verified = card.getAttribute("data-is-verified") === "True";
 
-        couponElements.forEach((element) => {
-          const discount =
-            element.querySelector(".offer-title")?.textContent?.trim() ||
-            "Discount";
-          const terms =
-            element.querySelector(".offer-description")?.textContent?.trim() ||
-            "Terms apply";
-          const verified = element.getAttribute("data-is-verified") === "True";
+        // Try to get direct code if available
+        let code = null;
+        let modalUrl = null;
 
-          // Try to get code without opening modal
-          let code = "AUTOMATIC";
-          let hasDirectCode = false;
+        // Check for direct code in data attributes or button
+        const showCodeBtn = card.querySelector(".show-code");
+        if (showCodeBtn) {
+          // Check various attributes where code might be stored
+          code =
+            showCodeBtn.getAttribute("data-code") ||
+            showCodeBtn.getAttribute("data-clipboard-text") ||
+            null;
 
-          // Check if code is directly available via data attributes
-          const showCodeBtn = element.querySelector(".show-code");
-          if (showCodeBtn) {
-            const dataCode =
-              showCodeBtn.getAttribute("data-code") ||
-              showCodeBtn.getAttribute("data-clipboard-text");
-            if (dataCode) {
-              code = dataCode;
-              hasDirectCode = true;
-            }
+          // If there's no direct code, get the modal URL
+          if (!code) {
+            modalUrl = card.getAttribute("data-modal") || null;
           }
+        }
 
-          // Get modal URL only if we don't have direct code
-          const modalUrl = element.getAttribute("data-modal");
-          const elementId = element.getAttribute("id") || `coupon-${idCounter}`;
-
-          const couponId = idCounter++;
-          basicCoupons.push({
-            id: couponId,
-            code,
-            discount,
-            terms,
-            verified,
-            source: "CouponFollow",
-            elementId,
-            modalUrl: modalUrl || null, // Store the modal URL with the coupon
-          });
-
-          // Only store modal URLs for coupons without direct codes
-          if (!hasDirectCode && modalUrl) {
-            modalUrls.push(modalUrl);
-            directCodes.set(couponId, false);
-            couponToModalMap.set(modalUrl, couponId); // Map modal URL to coupon ID
-          } else {
-            directCodes.set(couponId, true);
-          }
+        results.push({
+          id: index + 1,
+          discount,
+          terms,
+          verified,
+          code, // This will be null if not directly available
+          modalUrl,
         });
-
-        return {
-          basicCoupons,
-          modalUrls,
-          directCodes: Array.from(directCodes.entries()),
-          couponToModalMap: Array.from(couponToModalMap.entries()),
-        };
       });
 
+      return results;
+    });
+
     await log(
-      `Found ${basicCoupons.length} basic coupons for ${domain}, need to process ${modalUrls.length} modals`
+      `Found ${coupons.length} coupons for ${domain}, processing codes...`
     );
 
-    // Convert maps back from arrays
-    const directCodesMap = new Map(directCodes);
-    const modalToCouponMap = new Map(couponToModalMap);
+    // Process modals to get codes where needed
+    for (let i = 0; i < coupons.length; i++) {
+      const coupon = coupons[i];
 
-    // Create a copy of coupons to update
-    const completeCoupons = [...basicCoupons];
+      // Skip if we already have a code
+      if (coupon.code) {
+        await log(`Coupon ${coupon.id} already has code: ${coupon.code}`);
+        continue;
+      }
 
-    // Only process coupons that don't have direct codes
-    const modalUrlsToProcess = modalUrls.filter((url) => url);
+      // Skip if no modal URL
+      if (!coupon.modalUrl) {
+        await log(`Coupon ${coupon.id} has no code and no modal URL, skipping`);
+        continue;
+      }
 
-    if (modalUrlsToProcess.length > 0) {
+      // Process the modal
       try {
-        // Process in batches of 5 coupons
-        const batchSize = 5;
-        const totalModals = modalUrlsToProcess.length;
-        const totalBatches = Math.ceil(totalModals / batchSize);
+        await log(`Opening modal for coupon ${coupon.id}: ${coupon.modalUrl}`);
 
-        await log(
-          `Processing ${totalModals} modals in ${totalBatches} batches of ${batchSize}`
-        );
-
-        // Create a single page for modal processing
         const modalPage = await context.newPage();
         await modalPage.setUserAgent(
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
         );
-        await modalPage.setJavaScriptEnabled(true);
-        await modalPage.evaluateOnNewDocument(() => {
-          Object.defineProperty(navigator, "webdriver", { get: () => false });
-        });
 
-        // Block unnecessary resources
+        // Block images and other non-essential resources
         await modalPage.setRequestInterception(true);
         modalPage.on("request", (req) => {
           const resourceType = req.resourceType();
           if (
             resourceType === "image" ||
             resourceType === "font" ||
-            resourceType === "media" ||
-            resourceType === "stylesheet"
+            resourceType === "media"
           ) {
             req.abort();
           } else {
@@ -344,116 +204,95 @@ async function scrapeCoupons(domain, retryCount = 0) {
           }
         });
 
-        // Process in batches of 5
-        for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-          const startIndex = batchIndex * batchSize;
-          const endIndex = Math.min(startIndex + batchSize, totalModals);
-          const currentBatch = modalUrlsToProcess.slice(startIndex, endIndex);
+        // Navigate to the modal URL
+        await modalPage.goto(coupon.modalUrl, {
+          waitUntil: "networkidle2",
+          timeout: 30000,
+        });
 
-          await log(
-            `Processing batch ${batchIndex + 1}/${totalBatches} (modals ${
-              startIndex + 1
-            }-${endIndex})`
-          );
+        // Wait a moment for any JavaScript to run
+        await modalPage.waitForTimeout(1000);
 
-          // Process each coupon in the batch sequentially
-          for (const modalUrl of currentBatch) {
-            const couponId = modalToCouponMap.get(modalUrl);
-            if (!couponId) continue;
+        // Extract the code using multiple strategies
+        const code = await modalPage.evaluate(() => {
+          // Strategy 1: Look for input field with code
+          const codeInput = document.querySelector("input#code.input.code");
+          if (codeInput && codeInput.value && codeInput.value !== "AUTOMATIC") {
+            return codeInput.value.trim();
+          }
 
-            const couponIndex = basicCoupons.findIndex(
-              (coupon) => coupon.id === couponId
-            );
-            if (couponIndex === -1) continue;
-
-            try {
-              await modalPage.goto(modalUrl, {
-                waitUntil: "networkidle2",
-              });
-
-              // Define selectors to look for
-              const possibleSelectors = ["input#code.input.code"];
-
-              // Wait for at least one of the selectors to be present
-              try {
-                await modalPage.waitForFunction(
-                  (selectors) => {
-                    return selectors.some((selector) =>
-                      document.querySelector(selector)
-                    );
-                  },
-                  {},
-                  possibleSelectors
-                );
-
-                // Additional delay to ensure content is fully loaded
-                await new Promise((r) => setTimeout(r, 500));
-
-                // Try to extract the code
-                const code = await modalPage.evaluate((selectors) => {
-                  for (const selector of selectors) {
-                    const element = document.querySelector(selector);
-                    if (!element) continue;
-
-                    if (element.tagName === "INPUT") {
-                      const value = element.value.trim();
-                      if (value && value !== "AUTOMATIC") return value;
-                    } else {
-                      const clipboardText = element.getAttribute(
-                        "data-clipboard-text"
-                      );
-                      const dataCode = element.getAttribute("data-code");
-                      const textContent = element.textContent.trim();
-
-                      if (clipboardText && clipboardText !== "AUTOMATIC")
-                        return clipboardText;
-                      if (dataCode && dataCode !== "AUTOMATIC") return dataCode;
-                      if (textContent && textContent !== "AUTOMATIC")
-                        return textContent;
-                    }
-                  }
-                  return "AUTOMATIC";
-                }, possibleSelectors);
-
-                if (code && code !== "AUTOMATIC") {
-                  completeCoupons[couponIndex].code = code;
-                  await log(
-                    `Successfully extracted code "${code}" for coupon ${couponId}`
-                  );
-                }
-              } catch (waitError) {
-                await log(
-                  `Selector timeout for ${modalUrl}: ${waitError.message}`,
-                  "WARN"
-                );
-              }
-            } catch (error) {
-              await log(
-                `Error processing modal for coupon ${couponId}: ${error.message}`,
-                "ERROR"
-              );
+          // Strategy 2: Look for a coupon code display element
+          const codeDisplay = document.querySelector(".display-code");
+          if (codeDisplay) {
+            const displayText = codeDisplay.textContent.trim();
+            if (displayText && displayText !== "AUTOMATIC") {
+              return displayText;
             }
-
-            // Add a small delay between modals
-            await new Promise((r) => setTimeout(r, 500));
           }
 
-          // Add delay between batches
-          if (batchIndex < totalBatches - 1) {
-            await new Promise((r) => setTimeout(r, 1000));
+          // Strategy 3: Look for elements with data-code attribute
+          const dataCodeElements = document.querySelectorAll("[data-code]");
+          for (const el of dataCodeElements) {
+            const dataCode = el.getAttribute("data-code");
+            if (dataCode && dataCode !== "AUTOMATIC") {
+              return dataCode;
+            }
           }
+
+          // Strategy 4: Look for clipboard text
+          const clipboardElements = document.querySelectorAll(
+            "[data-clipboard-text]"
+          );
+          for (const el of clipboardElements) {
+            const clipText = el.getAttribute("data-clipboard-text");
+            if (clipText && clipText !== "AUTOMATIC") {
+              return clipText;
+            }
+          }
+
+          // Strategy 5: Look for specific text patterns that might be codes
+          const bodyText = document.body.innerText;
+          const codeMatches = bodyText.match(/Code:?\s*([A-Z0-9]{4,15})/i);
+          if (codeMatches && codeMatches[1]) {
+            return codeMatches[1].trim();
+          }
+
+          // No code found
+          return null;
+        });
+
+        if (code) {
+          coupon.code = code;
+          await log(
+            `Successfully extracted code "${code}" for coupon ${coupon.id}`
+          );
+        } else {
+          await log(`Could not extract code for coupon ${coupon.id}`, "WARN");
+          coupon.code = "AUTOMATIC"; // Default fallback
         }
 
         await modalPage.close();
-      } catch (error) {
-        logError(`Error in batch processing of modals`, error);
+
+        // Add a small delay between modal processing
+        await new Promise((r) => setTimeout(r, 500));
+      } catch (modalError) {
+        await log(
+          `Error processing modal for coupon ${coupon.id}: ${modalError.message}`,
+          "ERROR"
+        );
+        coupon.code = "AUTOMATIC"; // Default fallback
       }
     }
 
-    await log(
-      `Completed processing ${completeCoupons.length} coupons for ${domain}`
+    // Return only coupons with valid codes
+    const validCoupons = coupons.filter(
+      (coupon) => coupon.code && coupon.code !== "AUTOMATIC"
     );
-    return completeCoupons;
+
+    await log(
+      `Found ${validCoupons.length} valid coupons with codes for ${domain}`
+    );
+    return validCoupons;
   } catch (error) {
     logError(`Error scraping ${domain}`, error);
     if (retryCount < CONFIG.domainRetries) {
@@ -472,17 +311,15 @@ async function scrapeCoupons(domain, retryCount = 0) {
   }
 }
 
+// Modified saveToDatabase function to save all coupons individually
 async function saveToDatabase(domain, coupons) {
-  // Filter out only coupons with actual codes
-  const validCoupons = coupons.filter((coupon) => coupon.code !== "AUTOMATIC");
-
-  if (validCoupons.length === 0) {
+  if (coupons.length === 0) {
     await log(`No valid coupons to save for ${domain}`, "WARN");
     return;
   }
 
   // Prepare data for database
-  const couponsToSave = validCoupons.map((coupon) => ({
+  const couponsToSave = coupons.map((coupon) => ({
     domain,
     code: coupon.code,
     discount: coupon.discount,
@@ -492,12 +329,10 @@ async function saveToDatabase(domain, coupons) {
 
   // Log all collected coupon codes
   await log(
-    `Collected ${
-      couponsToSave.length
-    } coupon codes for ${domain}:\n${couponsToSave
+    `Saving ${couponsToSave.length} coupon codes for ${domain}:\n${couponsToSave
       .map(
-        (c) =>
-          `  - ${c.code} (${c.verified ? "verified" : "unverified"}): ${
+        (c, i) =>
+          `  ${i + 1}. ${c.code} (${c.verified ? "verified" : "unverified"}): ${
             c.discount
           }`
       )
@@ -506,12 +341,6 @@ async function saveToDatabase(domain, coupons) {
 
   // Save all collected coupons to database
   try {
-    await log(
-      `Saving ${couponsToSave.length} coupons for ${domain} to database...`
-    );
-
-    // You may need to modify your database schema or constraints
-    // to allow duplicate codes for the same domain
     const { error } = await supabase.from("coupons").insert(couponsToSave);
 
     if (error) {
