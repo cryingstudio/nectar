@@ -72,14 +72,14 @@ async function scrapeDomains(letter) {
 
     // Navigate to the letter page
     const letterParam = letter === "#" ? "num" : letter.toLowerCase();
-    await page.goto(`https://couponfollow.com/browse/${letterParam}`, {
+    await page.goto(`https://couponfollow.com/browse/${letterParam}/all`, {
       waitUntil: "networkidle2",
       timeout: 30000,
     });
 
     // Extract domain names
     const domains = await page.evaluate(() => {
-      const domainElements = document.querySelectorAll("a.site-name");
+      const domainElements = document.querySelectorAll("a.store-link");
       return Array.from(domainElements)
         .map((el) => {
           const url = el.getAttribute("href");
