@@ -226,7 +226,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
     // Optimize page loading strategy
     await log(`Navigating to couponfollow.com for ${domain}...`);
     await page.goto(`https://couponfollow.com/site/${domain}`, {
-      waitUntil: "domcontentloaded", // Faster than networkidle2
+      waitUntil: "networkidle2",
       timeout: CONFIG.navigationTimeout,
     });
 
@@ -267,24 +267,6 @@ async function scrapeCoupons(domain, retryCount = 0) {
           if (dataCode) {
             code = dataCode;
             hasDirectCode = true;
-          }
-        }
-
-        // Try to find code in any hidden input or span
-        if (!hasDirectCode) {
-          const codeElements = element.querySelectorAll(
-            'input[type="hidden"], .code-text, [data-clipboard-text]'
-          );
-          for (const el of codeElements) {
-            const possibleCode =
-              el.value ||
-              el.getAttribute("data-clipboard-text") ||
-              el.textContent;
-            if (possibleCode && possibleCode.trim() !== "") {
-              code = possibleCode.trim();
-              hasDirectCode = true;
-              break;
-            }
           }
         }
 
@@ -337,7 +319,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
     if (modalUrlsToProcess.length > 0) {
       try {
         // Increase batch size for better throughput
-        const batchSize = Math.min(CONFIG.batchSize * 2, 10); // Double but cap at 10
+        const batchSize = Math.min(CONFIG.batchSize);
         const totalModals = modalUrlsToProcess.length;
         const totalBatches = Math.ceil(totalModals / batchSize);
 
@@ -416,24 +398,36 @@ async function scrapeCoupons(domain, retryCount = 0) {
 
                   // Use a faster navigation strategy
                   await modalPage.goto(modalUrl, {
-                    waitUntil: "domcontentloaded", // Much faster than networkidle2
+                    waitUntil: "networkidle2",
                     timeout: shorterTimeout,
                   });
 
-                  // Don't wait for selectors, immediately try to extract
-                  // This reduces waiting time significantly
-                  const code = await modalPage.evaluate(() => {
-                    // Try all selectors at once
-                    const selectors = [
-                      "input#code.input.code",
-                      "input.input.code",
-                      ".coupon-code",
-                      ".code-text",
-                      "[data-clipboard-text]",
-                      "[data-code]",
-                    ];
+                  // Define selectors to look for
+                  const possibleSelectors = ["input#code.input.code"];
 
-                    // Try to find the code using any selector
+                  // Wait for at least one of the selectors to be present
+                  try {
+                    await modalPage.waitForFunction(
+                      (selectors) => {
+                        return selectors.some((selector) =>
+                          document.querySelector(selector)
+                        );
+                      },
+                      { timeout: 8000 },
+                      possibleSelectors
+                    );
+                  } catch (waitError) {
+                    console.error(
+                      `Selector timeout for ${modalUrl}: ${waitError.message}`
+                    );
+                  }
+
+                  // Additional delay to ensure content is fully loaded
+                  await new Promise((r) => setTimeout(r, 500));
+
+                  // Try to extract the code after waiting
+                  const code = await modalPage.evaluate((selectors) => {
+                    // Try all selectors at once
                     for (const selector of selectors) {
                       const element = document.querySelector(selector);
                       if (!element) continue;
@@ -451,11 +445,22 @@ async function scrapeCoupons(domain, retryCount = 0) {
                     }
 
                     return "AUTOMATIC"; // Default if not found
-                  });
+                  }, possibleSelectors);
 
                   // Update the coupon with the extracted code
                   if (code && code !== "AUTOMATIC") {
                     completeCoupons[couponIndex].code = code;
+                    console.log(
+                      `Successfully extracted code "${code}" from modal ${
+                        modalIndex + 1
+                      }`
+                    );
+                  } else {
+                    console.log(
+                      `Failed to extract code from modal ${
+                        modalIndex + 1
+                      }, defaulting to "AUTOMATIC"`
+                    );
                   }
                 } catch (error) {
                   // Silently fail and continue with other modals
@@ -569,12 +574,13 @@ async function main() {
   let totalSuccessCount = 0;
   let totalErrorCount = 0;
 
-  // Process each letter
-  for (const letter of letters) {
-    await log(`-------------------------------------------`);
-    await log(`Starting to process domains for letter: ${letter}`);
+  // First, scrape all domains for all letters
+  await log("Starting to scrape all domains for all letters...");
+  const domainsByLetter = new Map();
 
-    // Get all domains for this letter
+  // Scrape domains for each letter
+  for (const letter of letters) {
+    await log(`Scraping domains for letter: ${letter}`);
     const domains = await scrapeDomains(letter);
 
     if (domains.length === 0) {
@@ -582,9 +588,26 @@ async function main() {
       continue;
     }
 
-    await log(
-      `Found ${domains.length} domains for letter ${letter}, starting to scrape coupons...`
-    );
+    domainsByLetter.set(letter, domains);
+    await log(`Found ${domains.length} domains for letter ${letter}`);
+
+    // Add delay between letters for domain scraping
+    if (letters.indexOf(letter) < letters.length - 1) {
+      const delayBetweenLetters = CONFIG.delayBetweenDomains;
+      await log(`Waiting ${delayBetweenLetters}ms before next letter...`);
+      await new Promise((resolve) => setTimeout(resolve, delayBetweenLetters));
+    }
+  }
+
+  // Now process each letter's domains for coupons
+  for (const letter of letters) {
+    await log(`-------------------------------------------`);
+    await log(`Starting to process coupons for letter: ${letter}`);
+
+    const domains = domainsByLetter.get(letter) || [];
+    if (domains.length === 0) continue;
+
+    await log(`Processing ${domains.length} domains for letter ${letter}...`);
 
     let letterSuccessCount = 0;
     let letterErrorCount = 0;
