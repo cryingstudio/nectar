@@ -233,87 +233,91 @@ async function scrapeCoupons(domain, retryCount = 0) {
     await new Promise((r) => setTimeout(r, 500));
 
     // Immediately extract coupon data before all resources finish loading
-    const { basicCoupons, modalUrls, directCodes } = await page.evaluate(() => {
-      const basicCoupons = [];
-      const modalUrls = [];
-      const directCodes = new Map(); // Store any directly available codes
-      let idCounter = 1;
+    const { basicCoupons, modalUrls, directCodes, couponToModalMap } =
+      await page.evaluate(() => {
+        const basicCoupons = [];
+        const modalUrls = [];
+        const directCodes = new Map(); // Store any directly available codes
+        const couponToModalMap = new Map(); // Map coupon IDs to modal URLs
+        let idCounter = 1;
 
-      // Use faster selectors
-      const couponElements = document.querySelectorAll(
-        '.offer-card.regular-offer[data-type="coupon"]'
-      );
-      console.log(`Found ${couponElements.length} offer cards`);
+        // Use faster selectors
+        const couponElements = document.querySelectorAll(
+          '.offer-card.regular-offer[data-type="coupon"]'
+        );
+        console.log(`Found ${couponElements.length} offer cards`);
 
-      couponElements.forEach((element) => {
-        const discount =
-          element.querySelector(".offer-title")?.textContent?.trim() ||
-          "Discount";
-        const terms =
-          element.querySelector(".offer-description")?.textContent?.trim() ||
-          "Terms apply";
-        const verified = element.getAttribute("data-is-verified") === "True";
+        couponElements.forEach((element) => {
+          const discount =
+            element.querySelector(".offer-title")?.textContent?.trim() ||
+            "Discount";
+          const terms =
+            element.querySelector(".offer-description")?.textContent?.trim() ||
+            "Terms apply";
+          const verified = element.getAttribute("data-is-verified") === "True";
 
-        // Try to get code without opening modal
-        let code = "AUTOMATIC";
-        let hasDirectCode = false;
+          // Try to get code without opening modal
+          let code = "AUTOMATIC";
+          let hasDirectCode = false;
 
-        // Check if code is directly available via data attributes
-        const showCodeBtn = element.querySelector(".show-code");
-        if (showCodeBtn) {
-          const dataCode =
-            showCodeBtn.getAttribute("data-code") ||
-            showCodeBtn.getAttribute("data-clipboard-text");
-          if (dataCode) {
-            code = dataCode;
-            hasDirectCode = true;
+          // Check if code is directly available via data attributes
+          const showCodeBtn = element.querySelector(".show-code");
+          if (showCodeBtn) {
+            const dataCode =
+              showCodeBtn.getAttribute("data-code") ||
+              showCodeBtn.getAttribute("data-clipboard-text");
+            if (dataCode) {
+              code = dataCode;
+              hasDirectCode = true;
+            }
           }
-        }
 
-        // Get modal URL only if we don't have direct code
-        const modalUrl = element.getAttribute("data-modal");
-        const elementId = element.getAttribute("id") || `coupon-${idCounter}`;
+          // Get modal URL only if we don't have direct code
+          const modalUrl = element.getAttribute("data-modal");
+          const elementId = element.getAttribute("id") || `coupon-${idCounter}`;
 
-        basicCoupons.push({
-          id: idCounter++,
-          code,
-          discount,
-          terms,
-          verified,
-          source: "CouponFollow",
-          elementId,
+          const couponId = idCounter++;
+          basicCoupons.push({
+            id: couponId,
+            code,
+            discount,
+            terms,
+            verified,
+            source: "CouponFollow",
+            elementId,
+            modalUrl: modalUrl || null, // Store the modal URL with the coupon
+          });
+
+          // Only store modal URLs for coupons without direct codes
+          if (!hasDirectCode && modalUrl) {
+            modalUrls.push(modalUrl);
+            directCodes.set(couponId, false);
+            couponToModalMap.set(modalUrl, couponId); // Map modal URL to coupon ID
+          } else {
+            directCodes.set(couponId, true);
+          }
         });
 
-        // Only store modal URLs for coupons without direct codes
-        if (!hasDirectCode && modalUrl) {
-          modalUrls.push(modalUrl);
-          directCodes.set(idCounter - 1, false);
-        } else {
-          directCodes.set(idCounter - 1, true);
-        }
+        return {
+          basicCoupons,
+          modalUrls,
+          directCodes: Array.from(directCodes.entries()),
+          couponToModalMap: Array.from(couponToModalMap.entries()),
+        };
       });
-
-      return {
-        basicCoupons,
-        modalUrls,
-        directCodes: Array.from(directCodes.entries()),
-      };
-    });
 
     await log(
       `Found ${basicCoupons.length} basic coupons for ${domain}, need to process ${modalUrls.length} modals`
     );
 
-    // Convert directCodes array back to Map
+    // Convert maps back from arrays
     const directCodesMap = new Map(directCodes);
+    const modalToCouponMap = new Map(couponToModalMap);
 
     // Create a copy of coupons to update
     const completeCoupons = [...basicCoupons];
 
     // Only process coupons that don't have direct codes
-    const couponsToProcess = basicCoupons.filter(
-      (_, index) => !directCodesMap.get(index + 1)
-    );
     const modalUrlsToProcess = modalUrls.filter((url) => url);
 
     if (modalUrlsToProcess.length > 0) {
@@ -380,12 +384,20 @@ async function scrapeCoupons(domain, retryCount = 0) {
             const modalUrl = modalUrlsToProcess[modalIndex];
 
             // Find the original coupon index
-            const couponIndex = basicCoupons.findIndex(
-              (coupon) =>
-                !directCodesMap.get(coupon.id) && coupon.code === "AUTOMATIC"
-            );
+            const couponId = modalToCouponMap.get(modalUrl);
 
-            if (couponIndex === -1) continue;
+            if (!couponId) {
+              console.error(`No coupon ID found for modal URL: ${modalUrl}`);
+              continue;
+            }
+
+            const couponIndex = basicCoupons.findIndex(
+              (coupon) => coupon.id === couponId
+            );
+            if (couponIndex === -1) {
+              console.error(`No coupon found for ID: ${couponId}`);
+              continue;
+            }
 
             // Use a page from the pool
             const modalPage = pagePool[i % pagePool.length];
@@ -416,57 +428,65 @@ async function scrapeCoupons(domain, retryCount = 0) {
                       { timeout: 8000 },
                       possibleSelectors
                     );
-                  } catch (waitError) {
-                    console.error(
-                      `Selector timeout for ${modalUrl}: ${waitError.message}`
-                    );
-                  }
 
-                  // Additional delay to ensure content is fully loaded
-                  await new Promise((r) => setTimeout(r, 500));
+                    // Additional delay to ensure content is fully loaded
+                    await new Promise((r) => setTimeout(r, 500));
 
-                  // Try to extract the code after waiting
-                  const code = await modalPage.evaluate((selectors) => {
-                    // Try all selectors at once
-                    for (const selector of selectors) {
-                      const element = document.querySelector(selector);
-                      if (!element) continue;
+                    // Try to extract the code after waiting
+                    const code = await modalPage.evaluate((selectors) => {
+                      // Try all selectors at once
+                      for (const selector of selectors) {
+                        const element = document.querySelector(selector);
+                        if (!element) continue;
 
-                      // Extract code based on element type
-                      if (element.tagName === "INPUT") {
-                        return element.value.trim();
-                      } else {
-                        return (
-                          element.getAttribute("data-clipboard-text") ||
-                          element.getAttribute("data-code") ||
-                          element.textContent.trim()
-                        );
+                        // Extract code based on element type
+                        if (element.tagName === "INPUT") {
+                          const value = element.value.trim();
+                          if (value && value !== "AUTOMATIC") return value;
+                        } else {
+                          const clipboardText = element.getAttribute(
+                            "data-clipboard-text"
+                          );
+                          const dataCode = element.getAttribute("data-code");
+                          const textContent = element.textContent.trim();
+
+                          if (clipboardText && clipboardText !== "AUTOMATIC")
+                            return clipboardText;
+                          if (dataCode && dataCode !== "AUTOMATIC")
+                            return dataCode;
+                          if (textContent && textContent !== "AUTOMATIC")
+                            return textContent;
+                        }
                       }
+
+                      return "AUTOMATIC"; // Default if not found
+                    }, possibleSelectors);
+
+                    // Update the coupon with the extracted code
+                    if (code && code !== "AUTOMATIC") {
+                      completeCoupons[couponIndex].code = code;
+                      await log(
+                        `Successfully extracted code "${code}" from modal ${
+                          modalIndex + 1
+                        } for coupon ${couponId}`
+                      );
+                    } else {
+                      await log(
+                        `Failed to extract code from modal ${
+                          modalIndex + 1
+                        } for coupon ${couponId}, defaulting to "AUTOMATIC"`
+                      );
                     }
-
-                    return "AUTOMATIC"; // Default if not found
-                  }, possibleSelectors);
-
-                  // Update the coupon with the extracted code
-                  if (code && code !== "AUTOMATIC") {
-                    completeCoupons[couponIndex].code = code;
-                    console.log(
-                      `Successfully extracted code "${code}" from modal ${
-                        modalIndex + 1
-                      }`
-                    );
-                  } else {
-                    console.log(
-                      `Failed to extract code from modal ${
-                        modalIndex + 1
-                      }, defaulting to "AUTOMATIC"`
+                  } catch (waitError) {
+                    await log(
+                      `Selector timeout for ${modalUrl}: ${waitError.message}`,
+                      "WARN"
                     );
                   }
                 } catch (error) {
-                  // Silently fail and continue with other modals
-                  console.error(
-                    `Error with modal ${modalIndex}:`,
-                    error.message
+                  await log(
+                    `Error with modal ${modalIndex} (${modalUrl}): ${error.message}`,
+                    "ERROR"
                   );
                 }
               })()
@@ -518,7 +538,10 @@ async function saveToDatabase(domain, coupons) {
   const uniqueMap = new Map();
 
   coupons.forEach((coupon) => {
-    const key = `${domain}:${coupon.code}`;
+    // Only save coupons that have actual codes
+    if (coupon.code === "AUTOMATIC") return;
+
+    const key = `${domain}:${coupon.code}:${coupon.discount}`; // Include discount in uniqueness check
     if (!uniqueMap.has(key)) {
       uniqueMap.set(key, {
         domain,
@@ -533,9 +556,16 @@ async function saveToDatabase(domain, coupons) {
   const uniqueCoupons = Array.from(uniqueMap.values());
 
   if (uniqueCoupons.length === 0) {
-    await log(`No coupons to save for ${domain}`, "WARN");
+    await log(`No valid coupons to save for ${domain}`, "WARN");
     return;
   }
+
+  // Log the coupons being saved
+  await log(
+    `Preparing to save the following coupons for ${domain}:\n${uniqueCoupons
+      .map((c) => `  - ${c.code}: ${c.discount}`)
+      .join("\n")}`
+  );
 
   // Save to Supabase
   try {
@@ -547,7 +577,7 @@ async function saveToDatabase(domain, coupons) {
       .from("coupons")
       .upsert(uniqueCoupons, {
         onConflict: ["domain", "code"],
-        ignoreDuplicates: true,
+        ignoreDuplicates: false, // Allow updates if the discount/terms changed
       });
 
     if (error) {
