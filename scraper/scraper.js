@@ -238,8 +238,19 @@ async function scrapeCoupons(domain, retryCount = 0) {
           timeout: 30000,
         });
 
-        // Wait a moment for any JavaScript to run
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Wait for either of the code input elements to be present
+        await modalPage
+          .waitForFunction(
+            () => {
+              return document.querySelector("input#code.input.code") !== null;
+            },
+            { timeout: 5000 }
+          )
+          .catch(() => {
+            console.log(
+              `Timeout waiting for code input element for coupon ${coupon.id}`
+            );
+          });
 
         // Extract the code - focusing specifically on the input#code.input.code selector
         const code = await modalPage.evaluate(() => {
@@ -274,8 +285,8 @@ async function scrapeCoupons(domain, retryCount = 0) {
 
         await modalPage.close();
 
-        // Add a small delay between modal processing
-        await new Promise((r) => setTimeout(r, 500));
+        // Add a minimal delay between requests to avoid overwhelming the server
+        await new Promise((r) => setTimeout(r, 100));
       } catch (modalError) {
         console.error(
           `Error processing modal for coupon ${coupon.id}:`,
