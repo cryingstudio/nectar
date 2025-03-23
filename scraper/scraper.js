@@ -19,7 +19,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const CONFIG = {
   concurrentDomains: process.env.CONCURRENT_DOMAINS
     ? parseInt(process.env.CONCURRENT_DOMAINS)
-    : 3,
+    : 5,
   delayBetweenDomains: process.env.DELAY_BETWEEN_DOMAINS
     ? parseInt(process.env.DELAY_BETWEEN_DOMAINS)
     : 200,
