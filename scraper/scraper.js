@@ -117,22 +117,26 @@ async function scrapeDomains(letter, websiteKey) {
     });
 
     // Extract domain names using website-specific selectors and extraction logic
-    const domains = await page.evaluate((config) => {
-      const domainElements = document.querySelectorAll(
-        config.selectors.domainLinks
-      );
+    const domains = await page.evaluate((selector) => {
+      const domainElements = document.querySelectorAll(selector);
       return Array.from(domainElements)
         .map((el) => {
           const url = el.getAttribute("href");
-          return config.extractDomainFromUrl(url);
+          // Return the URL for processing outside evaluate
+          return url || null;
         })
         .filter(Boolean);
-    }, config);
+    }, config.selectors.domainLinks);
+
+    // Process the URLs outside of evaluate
+    const processedDomains = domains
+      .map((url) => config.extractDomainFromUrl(url))
+      .filter(Boolean);
 
     console.log(
-      `Found ${domains.length} domains for letter ${letter} on ${config.name}`
+      `Found ${processedDomains.length} domains for letter ${letter} on ${config.name}`
     );
-    return domains.map((domain) => ({ domain, websiteKey }));
+    return processedDomains.map((domain) => ({ domain, websiteKey }));
   } catch (error) {
     console.error(
       `Error scraping domains for letter ${letter} on ${config.name}:`,
