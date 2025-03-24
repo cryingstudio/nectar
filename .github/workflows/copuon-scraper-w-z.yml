@@ -28,5 +28,5 @@ jobs:
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
-          LETTERS: "w,x,y,z,0"
+          LETTERS: "w,x,y,z"
         run: node scraper/scraper.js
