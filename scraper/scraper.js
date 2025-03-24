@@ -197,103 +197,123 @@ async function scrapeCoupons(domain, retryCount = 0) {
     );
 
     // Process modals to get codes
-    for (let i = 0; i < basicCoupons.length; i++) {
-      const coupon = basicCoupons[i];
-      const modalUrl = modalUrls[i];
+    const BATCH_SIZE = 5; // Process this many modals in parallel
+    const modalPages = [];
 
-      // Skip if no modal URL
-      if (!modalUrl) {
-        console.log(`Coupon ${coupon.id} has no modal URL, skipping`);
-        coupon.code = "AUTOMATIC"; // Default fallback
-        continue;
-      }
+    // Create reusable modal pages
+    for (let i = 0; i < BATCH_SIZE; i++) {
+      const modalPage = await context.newPage();
+      await modalPage.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
+      );
 
-      // Process the modal
-      try {
-        console.log(`Opening modal for coupon ${coupon.id}: ${modalUrl}`);
-
-        const modalPage = await context.newPage();
-        await modalPage.setUserAgent(
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
-        );
-
-        // Block images and other non-essential resources
-        await modalPage.setRequestInterception(true);
-        modalPage.on("request", (req) => {
-          const resourceType = req.resourceType();
-          if (
-            resourceType === "image" ||
-            resourceType === "font" ||
-            resourceType === "media"
-          ) {
-            req.abort();
-          } else {
-            req.continue();
-          }
-        });
-
-        // Navigate to the modal URL
-        await modalPage.goto(modalUrl, {
-          waitUntil: "networkidle2",
-          timeout: 30000,
-        });
-
-        // Wait for either of the code input elements to be present
-        await modalPage
-          .waitForFunction(
-            () => {
-              return document.querySelector("input#code.input.code") !== null;
-            },
-            { timeout: 5000 }
-          )
-          .catch(() => {
-            console.log(
-              `Timeout waiting for code input element for coupon ${coupon.id}`
-            );
-          });
-
-        // Extract the code - focusing specifically on the input#code.input.code selector
-        const code = await modalPage.evaluate(() => {
-          // Target the specific selector that works from background.ts
-          const codeInput = document.querySelector("input#code.input.code");
-          if (codeInput && codeInput.value && codeInput.value !== "AUTOMATIC") {
-            return codeInput.value.trim();
-          }
-
-          // Fallback to input.input.code
-          const alternateInput = document.querySelector("input.input.code");
-          if (
-            alternateInput &&
-            alternateInput.value &&
-            alternateInput.value !== "AUTOMATIC"
-          ) {
-            return alternateInput.value.trim();
-          }
-
-          return null;
-        });
-
-        if (code) {
-          coupon.code = code;
-          console.log(
-            `Successfully extracted code "${code}" for coupon ${coupon.id}`
-          );
+      // Block images and other non-essential resources
+      await modalPage.setRequestInterception(true);
+      modalPage.on("request", (req) => {
+        const resourceType = req.resourceType();
+        if (
+          resourceType === "image" ||
+          resourceType === "font" ||
+          resourceType === "media"
+        ) {
+          req.abort();
         } else {
-          console.log(`Could not extract code for coupon ${coupon.id}`);
-          coupon.code = "AUTOMATIC"; // Default fallback
+          req.continue();
+        }
+      });
+
+      modalPages.push(modalPage);
+    }
+
+    try {
+      // Process modals in batches
+      for (let i = 0; i < basicCoupons.length; i += BATCH_SIZE) {
+        const batch = [];
+        const batchEnd = Math.min(i + BATCH_SIZE, basicCoupons.length);
+
+        // Create promises for this batch
+        for (let j = i; j < batchEnd; j++) {
+          const coupon = basicCoupons[j];
+          const modalUrl = modalUrls[j];
+          const modalPage = modalPages[j - i];
+
+          if (!modalUrl) {
+            console.log(`Coupon ${coupon.id} has no modal URL, skipping`);
+            coupon.code = "AUTOMATIC";
+            continue;
+          }
+
+          batch.push(
+            (async () => {
+              try {
+                console.log(
+                  `Processing modal for coupon ${coupon.id}: ${modalUrl}`
+                );
+
+                // Navigate to the modal URL with optimized settings
+                await modalPage.goto(modalUrl, {
+                  waitUntil: "domcontentloaded", // Changed from networkidle2 for faster loading
+                  timeout: 15000, // Reduced timeout
+                });
+
+                // Wait for code input with reduced timeout
+                await modalPage
+                  .waitForSelector("input#code.input.code", {
+                    timeout: 3000,
+                  })
+                  .catch(() => {
+                    console.log(
+                      `Timeout waiting for code input element for coupon ${coupon.id}`
+                    );
+                  });
+
+                // Extract the code
+                const code = await modalPage.evaluate(() => {
+                  const codeInput = document.querySelector(
+                    "input#code.input.code"
+                  );
+                  if (codeInput?.value && codeInput.value !== "AUTOMATIC") {
+                    return codeInput.value.trim();
+                  }
+
+                  const alternateInput =
+                    document.querySelector("input.input.code");
+                  if (
+                    alternateInput?.value &&
+                    alternateInput.value !== "AUTOMATIC"
+                  ) {
+                    return alternateInput.value.trim();
+                  }
+
+                  return null;
+                });
+
+                if (code) {
+                  coupon.code = code;
+                  console.log(
+                    `Successfully extracted code "${code}" for coupon ${coupon.id}`
+                  );
+                } else {
+                  console.log(`Could not extract code for coupon ${coupon.id}`);
+                  coupon.code = "AUTOMATIC";
+                }
+              } catch (modalError) {
+                console.error(
+                  `Error processing modal for coupon ${coupon.id}:`,
+                  modalError.message
+                );
+                coupon.code = "AUTOMATIC";
+              }
+            })()
+          );
         }
 
-        await modalPage.close();
-
-        // Add a minimal delay between requests to avoid overwhelming the server
-        await new Promise((r) => setTimeout(r, 100));
-      } catch (modalError) {
-        console.error(
-          `Error processing modal for coupon ${coupon.id}:`,
-          modalError.message
-        );
-        coupon.code = "AUTOMATIC"; // Default fallback
+        // Wait for all modals in this batch to complete
+        await Promise.all(batch);
       }
+    } finally {
+      // Close all modal pages
+      await Promise.all(modalPages.map((page) => page.close()));
     }
 
     // Return only coupons with valid codes
@@ -488,7 +508,7 @@ async function main() {
 
     // Add a longer delay between letters to avoid being detected as a bot
     if (letters.indexOf(letter) < letters.length - 1) {
-      const delayBetweenLetters = CONFIG.delayBetweenDomains * 2; // Twice the domain delay
+      const delayBetweenLetters = CONFIG.delayBetweenDomains; // Twice the domain delay
       console.log(`Waiting ${delayBetweenLetters}ms before next letter...`);
       await new Promise((resolve) => setTimeout(resolve, delayBetweenLetters));
     }
