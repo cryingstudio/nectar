@@ -237,18 +237,34 @@ async function scrapeCoupons(domain, retryCount = 0) {
 
         // Navigate with optimized settings
         await modalPage.goto(modalUrl, {
-          waitUntil: "domcontentloaded", // Changed from networkidle2 for speed
-          timeout: 15000, // Reduced timeout
+          waitUntil: "networkidle0", // Changed to ensure all requests complete
+          timeout: 20000, // Slightly increased timeout
         });
 
-        // Optimized code extraction
+        // Wait for the code input with a reasonable timeout
+        await modalPage
+          .waitForFunction(
+            () => {
+              const input =
+                document.querySelector("input#code.input.code") ||
+                document.querySelector("input.input.code");
+              return input && input.value && input.value.length > 0;
+            },
+            { timeout: 5000 }
+          )
+          .catch(() => {
+            console.log(
+              `Timeout waiting for code value for coupon ${coupon.id}`
+            );
+          });
+
+        // Optimized code extraction with retry
         const code = await modalPage.evaluate(() => {
           const codeInput =
             document.querySelector("input#code.input.code") ||
             document.querySelector("input.input.code");
-          return codeInput && codeInput.value && codeInput.value !== "AUTOMATIC"
-            ? codeInput.value.trim()
-            : null;
+          const value = codeInput?.value?.trim();
+          return value && value !== "AUTOMATIC" ? value : null;
         });
 
         if (code) {
@@ -257,8 +273,27 @@ async function scrapeCoupons(domain, retryCount = 0) {
             `Successfully extracted code "${code}" for coupon ${coupon.id}`
           );
         } else {
-          console.log(`Could not extract code for coupon ${coupon.id}`);
-          coupon.code = "AUTOMATIC";
+          // Try one more time after a short delay
+          await modalPage.waitForTimeout(200);
+          const retryCode = await modalPage.evaluate(() => {
+            const codeInput =
+              document.querySelector("input#code.input.code") ||
+              document.querySelector("input.input.code");
+            const value = codeInput?.value?.trim();
+            return value && value !== "AUTOMATIC" ? value : null;
+          });
+
+          if (retryCode) {
+            coupon.code = retryCode;
+            console.log(
+              `Successfully extracted code "${retryCode}" for coupon ${coupon.id} on retry`
+            );
+          } else {
+            console.log(
+              `Could not extract code for coupon ${coupon.id} after retry`
+            );
+            coupon.code = "AUTOMATIC";
+          }
         }
 
         await modalPage.close();
