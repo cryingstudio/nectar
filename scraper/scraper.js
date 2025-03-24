@@ -73,8 +73,14 @@ async function scrapeDomains(letter) {
     // Navigate to the letter page
     const letterParam = letter === "#" ? "num" : letter.toLowerCase();
     await page.goto(`https://couponfollow.com/site/browse/${letterParam}/all`, {
-      waitUntil: "networkidle2",
+      waitUntil: "networkidle0",
       timeout: 30000,
+    });
+
+    // Wait for store links to be present
+    await page.waitForSelector("a.store-link", {
+      timeout: 30000,
+      visible: true,
     });
 
     // Extract domain names
