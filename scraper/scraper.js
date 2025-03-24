@@ -28,13 +28,46 @@ const CONFIG = {
     : 2,
 };
 
+// Website-specific configurations
+const WEBSITE_CONFIGS = {
+  couponfollow: {
+    name: "CouponFollow",
+    baseUrl: "https://couponfollow.com",
+    selectors: {
+      domainLinks: "a.store-link",
+      couponCards: '.offer-card.regular-offer[data-type="coupon"]',
+      couponTitle: ".offer-title",
+      couponDescription: ".offer-description",
+      couponCode: "input#code.input.code, input.input.code",
+    },
+    getDomainUrl: (letter) => {
+      const letterParam = letter === "#" ? "num" : letter.toLowerCase();
+      return `https://couponfollow.com/site/browse/${letterParam}/all`;
+    },
+    extractDomainFromUrl: (url) => {
+      if (url && url.startsWith("/site/")) {
+        return url.split("/site/")[1];
+      }
+      return null;
+    },
+    getCouponUrl: (domain) => `https://couponfollow.com/site/${domain}`,
+  },
+};
+
 /**
  * Scrapes domains from a category page
  * @param {string} letter - The letter category to scrape
+ * @param {string} websiteKey - The key of the website configuration to use
  * @returns {Promise<string[]>} - Array of domain names
  */
-async function scrapeDomains(letter) {
-  console.log(`Scraping domains for letter: ${letter}`);
+async function scrapeDomains(letter, websiteKey) {
+  const config = WEBSITE_CONFIGS[websiteKey];
+  if (!config) {
+    console.error(`No configuration found for website: ${websiteKey}`);
+    return [];
+  }
+
+  console.log(`Scraping domains for letter: ${letter} from ${config.name}`);
 
   const browser = await puppeteer.launch({
     headless: "new",
@@ -70,39 +103,39 @@ async function scrapeDomains(letter) {
       }
     });
 
-    // Navigate to the letter page
-    const letterParam = letter === "#" ? "num" : letter.toLowerCase();
-    await page.goto(`https://couponfollow.com/site/browse/${letterParam}/all`, {
+    // Navigate to the letter page using the website-specific URL generator
+    const url = config.getDomainUrl(letter);
+    await page.goto(url, {
       waitUntil: "networkidle0",
       timeout: 30000,
     });
 
-    // Wait for store links to be present
-    await page.waitForSelector("a.store-link", {
+    // Wait for store links to be present using website-specific selector
+    await page.waitForSelector(config.selectors.domainLinks, {
       timeout: 30000,
       visible: true,
     });
 
-    // Extract domain names
-    const domains = await page.evaluate(() => {
-      const domainElements = document.querySelectorAll("a.store-link");
+    // Extract domain names using website-specific selectors and extraction logic
+    const domains = await page.evaluate((config) => {
+      const domainElements = document.querySelectorAll(
+        config.selectors.domainLinks
+      );
       return Array.from(domainElements)
         .map((el) => {
           const url = el.getAttribute("href");
-          // Extract domain from /site/domain-name format
-          if (url && url.startsWith("/site/")) {
-            return url.split("/site/")[1];
-          }
-          return null;
+          return config.extractDomainFromUrl(url);
         })
         .filter(Boolean);
-    });
+    }, config);
 
-    console.log(`Found ${domains.length} domains for letter ${letter}`);
-    return domains;
+    console.log(
+      `Found ${domains.length} domains for letter ${letter} on ${config.name}`
+    );
+    return domains.map((domain) => ({ domain, websiteKey }));
   } catch (error) {
     console.error(
-      `Error scraping domains for letter ${letter}:`,
+      `Error scraping domains for letter ${letter} on ${config.name}:`,
       error.message
     );
     return [];
@@ -114,11 +147,18 @@ async function scrapeDomains(letter) {
 /**
  * Scrapes coupons for a specific domain
  * @param {string} domain - The domain to scrape coupons for
+ * @param {string} websiteKey - The key of the website configuration to use
  * @param {number} retryCount - Current retry attempt
  * @returns {Promise<Array>} - Array of coupon objects
  */
-async function scrapeCoupons(domain, retryCount = 0) {
-  console.log(`Scraping coupons for ${domain}...`);
+async function scrapeCoupons(domain, websiteKey, retryCount = 0) {
+  const config = WEBSITE_CONFIGS[websiteKey];
+  if (!config) {
+    console.error(`No configuration found for website: ${websiteKey}`);
+    return [];
+  }
+
+  console.log(`Scraping coupons for ${domain} from ${config.name}...`);
 
   const browser = await puppeteer.launch({
     headless: "new",
@@ -157,28 +197,33 @@ async function scrapeCoupons(domain, retryCount = 0) {
       }
     });
 
-    console.log(`Navigating to couponfollow.com for ${domain}...`);
-    await page.goto(`https://couponfollow.com/site/${domain}`, {
+    console.log(`Navigating to ${config.name} for ${domain}...`);
+    const url = config.getCouponUrl(domain);
+    await page.goto(url, {
       waitUntil: "networkidle2",
       timeout: 60000,
     });
 
-    // Extract basic coupon information and modal URLs
-    const { basicCoupons, modalUrls } = await page.evaluate(() => {
+    // Extract basic coupon information and modal URLs using website-specific selectors
+    const { basicCoupons, modalUrls } = await page.evaluate((config) => {
       const basicCoupons = [];
       const modalUrls = [];
       let idCounter = 1;
 
       const couponCards = document.querySelectorAll(
-        '.offer-card.regular-offer[data-type="coupon"]'
+        config.selectors.couponCards
       );
 
       couponCards.forEach((card) => {
-        // Extract basic information
+        // Extract basic information using website-specific selectors
         const discount =
-          card.querySelector(".offer-title")?.textContent?.trim() || "";
+          card
+            .querySelector(config.selectors.couponTitle)
+            ?.textContent?.trim() || "";
         const terms =
-          card.querySelector(".offer-description")?.textContent?.trim() || "";
+          card
+            .querySelector(config.selectors.couponDescription)
+            ?.textContent?.trim() || "";
         const verified = card.getAttribute("data-is-verified") === "True";
 
         // Get modal URL for code extraction
@@ -189,14 +234,14 @@ async function scrapeCoupons(domain, retryCount = 0) {
           discount,
           terms,
           verified,
-          code: null, // Will be filled in later
+          code: null,
         });
 
         modalUrls.push(modalUrl);
       });
 
       return { basicCoupons, modalUrls };
-    });
+    }, config);
 
     console.log(
       `Found ${basicCoupons.length} coupons for ${domain}, processing codes...`
@@ -206,14 +251,12 @@ async function scrapeCoupons(domain, retryCount = 0) {
     const modalPromises = basicCoupons.map(async (coupon, i) => {
       const modalUrl = modalUrls[i];
 
-      // Skip if no modal URL
       if (!modalUrl) {
         console.log(`Coupon ${coupon.id} has no modal URL, skipping`);
-        coupon.code = "AUTOMATIC"; // Default fallback
+        coupon.code = "AUTOMATIC";
         return;
       }
 
-      // Process the modal
       try {
         console.log(`Opening modal for coupon ${coupon.id}: ${modalUrl}`);
 
@@ -222,11 +265,9 @@ async function scrapeCoupons(domain, retryCount = 0) {
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36"
         );
 
-        // Optimize page settings for speed
         await modalPage.setJavaScriptEnabled(true);
         await modalPage.setCacheEnabled(true);
 
-        // More aggressive resource blocking
         await modalPage.setRequestInterception(true);
         modalPage.on("request", (req) => {
           const resourceType = req.resourceType();
@@ -241,22 +282,20 @@ async function scrapeCoupons(domain, retryCount = 0) {
           }
         });
 
-        // Navigate with optimized settings
         await modalPage.goto(modalUrl, {
-          waitUntil: "networkidle0", // Changed to ensure all requests complete
-          timeout: 20000, // Slightly increased timeout
+          waitUntil: "networkidle0",
+          timeout: 20000,
         });
 
-        // Wait for the code input with a reasonable timeout
+        // Wait for and extract the code using website-specific selector
         await modalPage
           .waitForFunction(
-            () => {
-              const input =
-                document.querySelector("input#code.input.code") ||
-                document.querySelector("input.input.code");
+            (selector) => {
+              const input = document.querySelector(selector);
               return input && input.value && input.value.length > 0;
             },
-            { timeout: 5000 }
+            { timeout: 5000 },
+            config.selectors.couponCode
           )
           .catch(() => {
             console.log(
@@ -264,14 +303,11 @@ async function scrapeCoupons(domain, retryCount = 0) {
             );
           });
 
-        // Optimized code extraction with retry
-        const code = await modalPage.evaluate(() => {
-          const codeInput =
-            document.querySelector("input#code.input.code") ||
-            document.querySelector("input.input.code");
+        const code = await modalPage.evaluate((selector) => {
+          const codeInput = document.querySelector(selector);
           const value = codeInput?.value?.trim();
           return value && value !== "AUTOMATIC" ? value : null;
-        });
+        }, config.selectors.couponCode);
 
         if (code) {
           coupon.code = code;
@@ -279,15 +315,12 @@ async function scrapeCoupons(domain, retryCount = 0) {
             `Successfully extracted code "${code}" for coupon ${coupon.id}`
           );
         } else {
-          // Try one more time after a short delay
           await modalPage.waitForTimeout(200);
-          const retryCode = await modalPage.evaluate(() => {
-            const codeInput =
-              document.querySelector("input#code.input.code") ||
-              document.querySelector("input.input.code");
+          const retryCode = await modalPage.evaluate((selector) => {
+            const codeInput = document.querySelector(selector);
             const value = codeInput?.value?.trim();
             return value && value !== "AUTOMATIC" ? value : null;
-          });
+          }, config.selectors.couponCode);
 
           if (retryCode) {
             coupon.code = retryCode;
@@ -312,10 +345,8 @@ async function scrapeCoupons(domain, retryCount = 0) {
       }
     });
 
-    // Process all modals concurrently
     await Promise.all(modalPromises);
 
-    // Return only coupons with valid codes
     const validCoupons = basicCoupons.filter(
       (coupon) => coupon.code && coupon.code !== "AUTOMATIC"
     );
@@ -333,7 +364,7 @@ async function scrapeCoupons(domain, retryCount = 0) {
         })...`
       );
       await new Promise((r) => setTimeout(r, 2000));
-      return scrapeCoupons(domain, retryCount + 1);
+      return scrapeCoupons(domain, websiteKey, retryCount + 1);
     }
     return [];
   } finally {
@@ -392,6 +423,11 @@ async function saveToDatabase(domain, coupons) {
 async function main() {
   console.log("Starting coupon scraper...");
 
+  // Get websites to scrape from environment variable or use default (couponfollow)
+  const websiteKeys = process.env.WEBSITES
+    ? process.env.WEBSITES.split(",")
+    : ["couponfollow"];
+
   const letters = process.env.LETTERS
     ? process.env.LETTERS.split(",")
     : process.argv.length > 2
@@ -429,92 +465,121 @@ async function main() {
   let totalSuccessCount = 0;
   let totalErrorCount = 0;
 
-  // Process each letter in sequence
-  for (const letter of letters) {
-    console.log(`-------------------------------------------`);
-    console.log(`Starting to process letter: ${letter}`);
-
-    // Get domains for this letter
-    const domains = await scrapeDomains(letter);
-    if (domains.length === 0) {
-      console.log(`No domains found for letter ${letter}, skipping...`);
+  // Process each website
+  for (const websiteKey of websiteKeys) {
+    const config = WEBSITE_CONFIGS[websiteKey];
+    if (!config) {
+      console.error(
+        `No configuration found for website: ${websiteKey}, skipping...`
+      );
       continue;
     }
 
-    console.log(`Processing ${domains.length} domains for letter ${letter}...`);
+    console.log(`\n=== Starting to scrape ${config.name} ===\n`);
 
-    let letterSuccessCount = 0;
-    let letterErrorCount = 0;
+    // Process each letter for the current website
+    for (const letter of letters) {
+      console.log(`-------------------------------------------`);
+      console.log(`Starting to process letter: ${letter} on ${config.name}`);
 
-    // Process domains in batches for concurrency
-    for (let i = 0; i < domains.length; i += CONFIG.concurrentDomains) {
-      const batch = domains.slice(i, i + CONFIG.concurrentDomains);
-      console.log(
-        `Processing batch of ${batch.length} domains (${i + 1}-${Math.min(
-          i + CONFIG.concurrentDomains,
-          domains.length
-        )} of ${domains.length})...`
-      );
-
-      const results = await Promise.all(
-        batch.map(async (domain) => {
-          try {
-            console.log(`Starting processing for domain: ${domain}`);
-
-            const coupons = await scrapeCoupons(domain);
-
-            if (coupons.length > 0) {
-              await saveToDatabase(domain, coupons);
-              console.log(`Completed processing for domain: ${domain}`);
-              return { success: true, domain };
-            } else {
-              console.log(`No coupons found for ${domain}`);
-              console.log(`Completed processing for domain: ${domain}`);
-              return { success: false, domain };
-            }
-          } catch (error) {
-            console.error(`Failed to process domain: ${domain}`, error.message);
-            return { success: false, domain };
-          }
-        })
-      );
-
-      // Count successes and failures
-      results.forEach((result) => {
-        if (result.success) {
-          letterSuccessCount++;
-          totalSuccessCount++;
-        } else {
-          letterErrorCount++;
-          totalErrorCount++;
-        }
-      });
-
-      // Add a delay between batches to avoid overloading resources
-      if (i + CONFIG.concurrentDomains < domains.length) {
+      // Get domains for this letter
+      const domains = await scrapeDomains(letter, websiteKey);
+      if (domains.length === 0) {
         console.log(
-          `Waiting ${CONFIG.delayBetweenDomains}ms before next batch...`
+          `No domains found for letter ${letter} on ${config.name}, skipping...`
         );
+        continue;
+      }
+
+      console.log(
+        `Processing ${domains.length} domains for letter ${letter} on ${config.name}...`
+      );
+
+      let letterSuccessCount = 0;
+      let letterErrorCount = 0;
+
+      // Process domains in batches for concurrency
+      for (let i = 0; i < domains.length; i += CONFIG.concurrentDomains) {
+        const batch = domains.slice(i, i + CONFIG.concurrentDomains);
+        console.log(
+          `Processing batch of ${batch.length} domains (${i + 1}-${Math.min(
+            i + CONFIG.concurrentDomains,
+            domains.length
+          )} of ${domains.length})...`
+        );
+
+        const results = await Promise.all(
+          batch.map(async (domain) => {
+            try {
+              console.log(`Starting processing for domain: ${domain.domain}`);
+
+              const coupons = await scrapeCoupons(
+                domain.domain,
+                domain.websiteKey
+              );
+
+              if (coupons.length > 0) {
+                await saveToDatabase(domain.domain, coupons);
+                console.log(
+                  `Completed processing for domain: ${domain.domain}`
+                );
+                return { success: true, domain: domain.domain };
+              } else {
+                console.log(`No coupons found for ${domain.domain}`);
+                console.log(
+                  `Completed processing for domain: ${domain.domain}`
+                );
+                return { success: false, domain: domain.domain };
+              }
+            } catch (error) {
+              console.error(
+                `Failed to process domain: ${domain.domain}`,
+                error.message
+              );
+              return { success: false, domain: domain.domain };
+            }
+          })
+        );
+
+        // Count successes and failures
+        results.forEach((result) => {
+          if (result.success) {
+            letterSuccessCount++;
+            totalSuccessCount++;
+          } else {
+            letterErrorCount++;
+            totalErrorCount++;
+          }
+        });
+
+        // Add a delay between batches to avoid overloading resources
+        if (i + CONFIG.concurrentDomains < domains.length) {
+          console.log(
+            `Waiting ${CONFIG.delayBetweenDomains}ms before next batch...`
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, CONFIG.delayBetweenDomains)
+          );
+        }
+      }
+
+      console.log(
+        `Letter ${letter} completed on ${config.name}: ${letterSuccessCount} successes, ${letterErrorCount} failures`
+      );
+
+      // Add a longer delay between letters to avoid being detected as a bot
+      if (letters.indexOf(letter) < letters.length - 1) {
+        const delayBetweenLetters = CONFIG.delayBetweenDomains;
+        console.log(`Waiting ${delayBetweenLetters}ms before next letter...`);
         await new Promise((resolve) =>
-          setTimeout(resolve, CONFIG.delayBetweenDomains)
+          setTimeout(resolve, delayBetweenLetters)
         );
       }
     }
-
-    console.log(
-      `Letter ${letter} completed: ${letterSuccessCount} successes, ${letterErrorCount} failures`
-    );
-
-    // Add a longer delay between letters to avoid being detected as a bot
-    if (letters.indexOf(letter) < letters.length - 1) {
-      const delayBetweenLetters = CONFIG.delayBetweenDomains; // Twice the domain delay
-      console.log(`Waiting ${delayBetweenLetters}ms before next letter...`);
-      await new Promise((resolve) => setTimeout(resolve, delayBetweenLetters));
-    }
   }
 
-  console.log(`----------------------------------------`);
-  console.log(`Coupon scraping completed!`);
+  console.log(`\n========================================`);
+  console.log(`Coupon scraping completed for all websites!`);
   console.log(`Successfully processed: ${totalSuccessCount} domains`);
   console.log(`Failed to process: ${totalErrorCount} domains`);
 
