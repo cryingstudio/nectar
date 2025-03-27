@@ -52,7 +52,7 @@
 }
 
 body {
-  @apply bg-neutral-800 text-white font-montserrat;
+  @apply bg-neutral-600 text-white font-montserrat;
 }
 
 .custom-scrollbar::-webkit-scrollbar {

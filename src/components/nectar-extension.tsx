@@ -13,6 +13,7 @@ interface Coupon {
   discount: string;
   terms: string;
   verified: boolean;
+  spotlightPosition?: { x: number; y: number };
 }
 
 interface ExtensionSettings {
@@ -27,6 +28,13 @@ interface ExtensionSettings {
     baseUrl: string;
   }[];
 }
+
+// Function to generate a random position within the card dimensions
+const getRandomPosition = (width: number, height: number) => {
+  const x = Math.random() * width;
+  const y = Math.random() * height;
+  return { x, y };
+};
 
 export default function NectarExtension() {
   const [currentSite, setCurrentSite] = useState("");
@@ -93,7 +101,17 @@ export default function NectarExtension() {
               }
 
               if (response && response.success) {
-                setCoupons(response.coupons);
+                const fetchedCoupons = response.coupons;
+                const couponsWithPositions = fetchedCoupons.map(
+                  (coupon: any) => {
+                    // Generate spotlight position only once per coupon
+                    return {
+                      ...coupon,
+                      spotlightPosition: getRandomPosition(300, 100), // Set random position here
+                    };
+                  }
+                );
+                setCoupons(couponsWithPositions);
               } else {
                 setError(response?.error || "Failed to fetch coupons");
                 setCoupons([]);
@@ -124,7 +142,7 @@ export default function NectarExtension() {
   };
 
   return (
-    <Card className="border border-neutral-800 bg-neutral-900 shadow-xl overflow-hidden w-[350px] rounded-3xl">
+    <Card className="border border-neutral-800 bg-gradient-to-r from-neutral-800 to-neutral-950 shadow-xl overflow-hidden w-[350px] rounded-3xl relative">
       <div className="pl-4 pr-4 flex items-center justify-between">
         <div className="flex flex-col">
           <h1 className="text-2xl font-bold text-white flex items-center">
@@ -142,7 +160,7 @@ export default function NectarExtension() {
 
       <Separator className="bg-neutral-800" />
 
-      <div className="pl-4 bg-neutral-900 text-neutral-400 text-sm">
+      <div className="pl-4 text-neutral-400 text-sm">
         {loading
           ? "Searching for coupons..."
           : error
@@ -166,52 +184,62 @@ export default function NectarExtension() {
               No coupons found for this site
             </div>
           ) : (
-            coupons.map((coupon, index) => (
-              <div
-                key={coupon.id}
-                className={`p-4 border-b border-neutral-800 hover:bg-neutral-800/50 ${
-                  index === 0 ? "border-t border-neutral-800" : ""
-                }`}
-              >
-                <div className="flex justify-between items-center mb-2">
-                  <div className="flex items-center">
-                    <span className="text-sm font-bold text-white bg-neutral-800 px-3 py-2 rounded">
-                      {coupon.code}
-                    </span>
-                    {coupon.verified && (
-                      <Badge className="ml-2 bg-green-900 text-green-300 hover:bg-green-900">
-                        Verified
-                      </Badge>
-                    )}
+            coupons.map((coupon, index) => {
+              return (
+                <div
+                  key={coupon.id}
+                  style={{
+                    background: `radial-gradient(300px circle at ${coupon.spotlightPosition?.x}px ${coupon.spotlightPosition?.y}px, rgba(251, 191, 36, 0.05), transparent 40%)`,
+                    transition: "background 0.3s ease-in-out",
+                  }}
+                  className={`p-4 border border-neutral-700/40 rounded-xl bg-neutral-900 hover:bg-neutral-800/50 mb-2 mx-2 relative transition-all duration-300 ${
+                    index === 0 ? "mt-2" : ""
+                  }`}
+                >
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="flex items-center">
+                      <span className="text-sm font-bold bg-neutral-800/40 text-white px-3 py-2 rounded">
+                        {coupon.code}
+                      </span>
+                      {coupon.verified && (
+                        <Badge className="ml-2 bg-green-900 text-green-300 hover:bg-green-900">
+                          Verified
+                        </Badge>
+                      )}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-amber-600 text-amber-400 hover:bg-amber-600/40 transition-all duration-150 cursor-pointer"
+                      onClick={() => handleCopy(coupon.code)}
+                    >
+                      {copiedCode === coupon.code ? (
+                        <div className="flex items-center">
+                          <Check className="h-4 w-4 mr-1" />
+                          <span>Copied</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center">
+                          <Copy className="h-4 w-4 mr-1" />
+                          <span>Copy</span>
+                        </div>
+                      )}
+                    </Button>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-amber-600 bg-neutral-900 text-amber-400 hover:bg-amber-600/40"
-                    onClick={() => handleCopy(coupon.code)}
-                  >
-                    {copiedCode === coupon.code ? (
-                      <div className="flex items-center">
-                        <Check className="h-4 w-4 mr-1" />
-                        <span>Copied</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center">
-                        <Copy className="h-4 w-4 mr-1" />
-                        <span>Copy</span>
-                      </div>
-                    )}
-                  </Button>
+                  <p className="font-medium text-amber-400">
+                    {coupon.discount}
+                  </p>
+                  <p className="text-sm text-neutral-400 mt-1">
+                    {coupon.terms}
+                  </p>
                 </div>
-                <p className="font-medium text-amber-400">{coupon.discount}</p>
-                <p className="text-sm text-neutral-400 mt-1">{coupon.terms}</p>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </CardContent>
 
-      <div className="pl-4 bg-neutral-900 text-neutral-500 text-xs">
+      <div className="pl-4 text-neutral-500 text-xs">
         Last updated: {new Date().toLocaleDateString()}
       </div>
     </Card>
