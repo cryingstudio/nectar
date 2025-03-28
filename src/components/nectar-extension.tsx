@@ -147,7 +147,7 @@ export default function NectarExtension() {
         <div className="flex flex-col">
           <h1 className="text-2xl font-bold text-white flex items-center">
             Nectar
-            <Badge className="ml-2 bg-amber-700 text-white hover:bg-amber-800">
+            <Badge className="ml-2 bg-gradient-to-tl from-amber-700 to-amber-800 text-white">
               Beta
             </Badge>
           </h1>
@@ -189,7 +189,7 @@ export default function NectarExtension() {
                 <div
                   key={coupon.id}
                   style={{
-                    background: `radial-gradient(300px circle at ${coupon.spotlightPosition?.x}px ${coupon.spotlightPosition?.y}px, rgba(251, 191, 36, 0.05), transparent 40%)`,
+                    background: `radial-gradient(400px circle at ${coupon.spotlightPosition?.x}px ${coupon.spotlightPosition?.y}px, rgba(251, 191, 36, 0.05), transparent 80%)`,
                     transition: "background 0.3s ease-in-out",
                   }}
                   className={`p-4 border border-neutral-700/40 rounded-xl bg-neutral-900 hover:bg-neutral-800/50 mb-2 mx-2 relative transition-all duration-300 ${
@@ -198,7 +198,7 @@ export default function NectarExtension() {
                 >
                   <div className="flex justify-between items-center mb-2">
                     <div className="flex items-center">
-                      <span className="text-sm font-bold bg-neutral-800/40 text-white px-3 py-2 rounded">
+                      <span className="text-sm font-bold bg-neutral-900/40 text-white px-3 py-2 rounded">
                         {coupon.code}
                       </span>
                       {coupon.verified && (
