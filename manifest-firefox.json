@@ -4,10 +4,8 @@
     "manifest_version": 3,
     "description": "Save Money with ONE click!",
     "permissions": [
-      "storage"
-    ],
-    "host_permissions": [
-      "*://*/*"
+      "storage",
+      "activeTab"
     ],
     "action": { 
       "default_popup": "index.html",
