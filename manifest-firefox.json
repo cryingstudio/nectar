@@ -7,6 +7,9 @@
       "storage",
       "activeTab"
     ],
+    "host_permissions": [
+      "https://nectar-db.vercel.app/api/*"
+    ],
     "action": { 
       "default_popup": "index.html",
       "default_icon": {
@@ -19,13 +22,6 @@
     "background": {
       "scripts": ["background.js"]
     },
-    "content_scripts": [
-      {
-        "matches": ["<all_urls>"],
-        "js": ["content-script.js"],
-        "run_at": "document_end"
-      }
-    ],
     "icons": {
       "16": "Nectar-16.png",
       "32": "Nectar-32.png",

@@ -7,6 +7,9 @@
       "storage",
       "activeTab"
     ],
+    "host_permissions": [
+      "https://nectar-db.vercel.app/api/*"
+    ],
     "action": { 
       "default_popup": "index.html",
       "default_icon": {
@@ -19,29 +22,10 @@
     "background": {
       "service_worker": "background.js"
     },
-    "content_scripts": [
-      {
-        "matches": ["<all_urls>"],
-        "js": ["content-script.js"],
-        "run_at": "document_end"
-      }
-    ],
     "icons": {
       "16": "Nectar-16.png",
       "32": "Nectar-32.png",
       "48": "Nectar-48.png",
       "128": "Nectar-128.png"
-    },
-    "browser_specific_settings": {
-      "gecko": {
-        "id": "nectar@example.com",
-        "strict_min_version": "109.0"
-      }
-    },
-    "web_accessible_resources": [
-      {
-        "resources": ["icon128.png"],
-        "matches": ["<all_urls>"]
-      }
-    ]
+    }
   }
