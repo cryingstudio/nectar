@@ -4,16 +4,10 @@
     "manifest_version": 3,
     "description": "Save Money with ONE click!",
     "permissions": [
-      "activeTab",
-      "scripting",
-      "storage",
-      "tabs",
-      "alarms",
-      "notifications"
+      "storage"
     ],
     "host_permissions": [
-      "*://*/*",
-      "https://couponfollow.com/*"
+      "*://*/*"
     ],
     "action": { 
       "default_popup": "index.html",
@@ -39,17 +33,5 @@
       "32": "Nectar-32.png",
       "48": "Nectar-48.png",
       "128": "Nectar-128.png"
-    },
-    "browser_specific_settings": {
-      "gecko": {
-        "id": "nectar@example.com",
-        "strict_min_version": "109.0"
-      }
-    },
-    "web_accessible_resources": [
-      {
-        "resources": ["icon128.png"],
-        "matches": ["<all_urls>"]
-      }
-    ]
+    }
   }

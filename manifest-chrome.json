@@ -4,16 +4,10 @@
     "manifest_version": 3,
     "description": "Save Money with ONE click!",
     "permissions": [
-      "activeTab",
-      "scripting",
-      "storage",
-      "tabs",
-      "alarms",
-      "notifications"
+      "storage"
     ],
     "host_permissions": [
-      "*://*/*",
-      "https://couponfollow.com/*"
+      "*://*/*"
     ],
     "action": { 
       "default_popup": "index.html",

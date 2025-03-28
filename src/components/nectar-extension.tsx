@@ -177,10 +177,9 @@ export default function NectarExtension() {
           ) : error ? (
             <div className="p-4 text-center text-red-400">
               <p>{error}</p>
-              <p className="text-sm mt-2">Please try again later</p>
             </div>
           ) : coupons.length === 0 ? (
-            <div className="p-4 text-center text-neutral-400">
+            <div className="pl-4 align-middle text-neutral-400">
               No coupons found for this site
             </div>
           ) : (
